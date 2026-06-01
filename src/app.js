@@ -14,7 +14,7 @@ const state = {
   showVoronoi: false,
   pruneBranches: false,
   showRibs: false,
-  ribDivisions: 5,
+  ribSpacing: 50,
   hoverCircle: true,
   showGovernors: true,
   isDrawing: false,
@@ -185,6 +185,7 @@ function recomputeMAT() {
 // Drawing Routine
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
 
   // 1. Grid Background
   drawGrid();
@@ -367,13 +368,16 @@ function draw() {
         ? state.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
         : state.skeletonData.simplifiedSegments;
 
-      const N = state.ribDivisions;
       ctx.shadowBlur = 0;
 
       for (const seg of segmentsToDivide) {
         const startPt = seg.start;
         const endPt = seg.end;
         const vec = endPt.sub(startPt);
+        const len = vec.length();
+
+        // Calculate the number of divisions dynamically based on segment length and target spacing
+        const N = Math.max(1, Math.round(len / state.ribSpacing));
 
         for (let k = 1; k < N; k++) {
           const t = k / N;
@@ -436,6 +440,78 @@ function draw() {
             ctx.fillStyle = '#f43f5e';
             ctx.fill();
           }
+        }
+      }
+
+      // Draw ribs for active internal nodes (junctions)
+      const activeInternalNodes = new Set();
+      for (const seg of segmentsToDivide) {
+        if (!seg.start.isEndPoint) activeInternalNodes.add(seg.start);
+        if (!seg.end.isEndPoint) activeInternalNodes.add(seg.end);
+      }
+
+      for (const node of activeInternalNodes) {
+        // Find all closest points on all segments to the node
+        const candidates = [];
+        for (let i = 0; i < state.polygon.length; i++) {
+          const v1 = state.polygon[i];
+          const v2 = state.polygon[(i + 1) % state.polygon.length];
+          const cp = closestPointOnSegment(node, v1, v2);
+          const dist = node.dist(cp);
+          candidates.push({
+            point: cp,
+            dist: dist,
+            vector: cp.sub(node).normalize()
+          });
+        }
+
+        // Sort candidates by distance
+        candidates.sort((a, b) => a.dist - b.dist);
+
+        const closest1 = candidates[0];
+        let closest2 = null;
+        let closest3 = null;
+
+        // Find the second closest point in a different direction (dot product < 0.5)
+        for (let i = 1; i < candidates.length; i++) {
+          const cand = candidates[i];
+          if (closest1.vector.dot(cand.vector) < 0.5) {
+            closest2 = cand;
+            break;
+          }
+        }
+
+        // Find the third closest point in a different direction (dot product < 0.5 with both)
+        if (closest2) {
+          for (let i = 1; i < candidates.length; i++) {
+            const cand = candidates[i];
+            if (cand === closest2) continue;
+            if (closest1.vector.dot(cand.vector) < 0.5 && closest2.vector.dot(cand.vector) < 0.5) {
+              closest3 = cand;
+              break;
+            }
+          }
+        }
+
+        const ribsToDraw = [closest1];
+        if (closest2) ribsToDraw.push(closest2);
+        if (closest3) ribsToDraw.push(closest3);
+
+        for (const rib of ribsToDraw) {
+          // Draw structural rib line to boundary
+          ctx.beginPath();
+          ctx.moveTo(node.x, node.y);
+          ctx.lineTo(rib.point.x, rib.point.y);
+          ctx.strokeStyle = 'rgba(244, 63, 94, 0.65)'; // Hot-pink red ribs
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([2, 2]);
+          ctx.stroke();
+
+          // Draw contact point on boundary
+          ctx.beginPath();
+          ctx.arc(rib.point.x, rib.point.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = '#f43f5e';
+          ctx.fill();
         }
       }
     }
@@ -606,12 +682,12 @@ function setupEventListeners() {
     recomputeMAT();
   });
   
-  // Slider - Rib divisions N
+  // Slider - Rib Spacing
   const sRibs = document.getElementById('slider-ribs');
   const valRibs = document.getElementById('val-ribs');
   sRibs.addEventListener('input', (e) => {
-    state.ribDivisions = parseInt(e.target.value);
-    valRibs.innerText = state.ribDivisions;
+    state.ribSpacing = parseInt(e.target.value);
+    valRibs.innerText = `${state.ribSpacing}px`;
     requestAnimationFrame(draw);
   });
   
