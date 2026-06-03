@@ -1169,7 +1169,7 @@ function setupEventListeners() {
   sRibs.addEventListener('input', (e) => {
     state.ribSpacing = parseFloat(e.target.value);
     valRibs.innerText = `${state.ribSpacing.toFixed(1)}m`;
-    draw();
+    recomputeMAT();
   });
   
   // Slider - Merge distance (in meters)
