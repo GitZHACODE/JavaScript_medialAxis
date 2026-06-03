@@ -454,7 +454,7 @@ function recomputeMAT() {
     
     // A. Add boundary edges
     for (let i = 0; i < state.polygon.length; i++) {
-      graph.addEdge(state.polygon[i], state.polygon[(i + 1) % state.polygon.length]);
+      graph.addEdge(state.polygon[i], state.polygon[(i + 1) % state.polygon.length], 'boundary');
     }
     
     // B. Add skeleton segments
@@ -464,7 +464,7 @@ function recomputeMAT() {
           ? skeleton.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
           : skeleton.simplifiedSegments;
         for (const seg of segmentsToUse) {
-          graph.addEdge(seg.start, seg.end);
+          graph.addEdge(seg.start, seg.end, 'skeleton');
         }
       } else {
         const samples = state.samplesPerEdge;
@@ -474,7 +474,7 @@ function recomputeMAT() {
             const idx1 = i * samples + j;
             const idx2 = i * samples + (j + 1);
             if (pts[idx1] && pts[idx2]) {
-              graph.addEdge(pts[idx1], pts[idx2]);
+              graph.addEdge(pts[idx1], pts[idx2], 'skeleton');
             }
           }
         }
@@ -484,8 +484,9 @@ function recomputeMAT() {
     // C. Add accepted ribs (when showRibs is ON and we have simplified segments)
     if (state.showSkeleton && state.showRibs && state.simplifySkeleton) {
       const acceptedRibs = computeAcceptedRibs();
-      for (const rib of acceptedRibs) {
-        graph.addEdge(rib.source, rib.target);
+      for (let idx = 0; idx < acceptedRibs.length; idx++) {
+        const rib = acceptedRibs[idx];
+        graph.addEdge(rib.source, rib.target, `rib_${idx}`);
       }
     }
     

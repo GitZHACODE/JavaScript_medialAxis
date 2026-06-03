@@ -33,7 +33,7 @@ export class PlanarGraph {
    * @param {Vector2D} pt1 
    * @param {Vector2D} pt2 
    */
-  addEdge(pt1, pt2) {
+  addEdge(pt1, pt2, type = 'unknown') {
     const u = this.addVertex(pt1);
     const v = this.addVertex(pt2);
     if (u === v) return;
@@ -41,7 +41,7 @@ export class PlanarGraph {
     // Check if edge already exists
     const exists = this.edges.some(e => (e[0] === u && e[1] === v) || (e[0] === v && e[1] === u));
     if (!exists) {
-      this.edges.push([u, v]);
+      this.edges.push([u, v, type]);
     }
   }
 
@@ -62,6 +62,7 @@ export class PlanarGraph {
       for (const edge of this.edges) {
         const u = edge[0];
         const v = edge[1];
+        const type = edge[2];
         const ptU = this.vertices[u];
         const ptV = this.vertices[v];
         const edgeVec = ptV.sub(ptU);
@@ -93,11 +94,11 @@ export class PlanarGraph {
         }
 
         if (splitVertexIdx !== -1) {
-          newEdges.push([u, splitVertexIdx]);
-          newEdges.push([splitVertexIdx, v]);
+          newEdges.push([u, splitVertexIdx, type]);
+          newEdges.push([splitVertexIdx, v, type]);
           changed = true;
         } else {
-          newEdges.push([u, v]);
+          newEdges.push([u, v, type]);
         }
       }
 
@@ -106,9 +107,10 @@ export class PlanarGraph {
       for (const e of newEdges) {
         const u = e[0];
         const v = e[1];
+        const type = e[2];
         const exists = this.edges.some(existing => (existing[0] === u && existing[1] === v) || (existing[0] === v && existing[1] === u));
         if (!exists && u !== v) {
-          this.edges.push([u, v]);
+          this.edges.push([u, v, type]);
         }
       }
     }
@@ -194,7 +196,29 @@ export class PlanarGraph {
 
           // If the signed area is positive (CCW cycle), it is an interior cell!
           if (area > 1e-4) {
-            faces.push(points);
+            // Filter: cells formed between structural ribs and exterior polygon are the only ones to consider.
+            // A cell must contain at least 1 boundary edge and at least 2 distinct structural rib edges.
+            let boundaryCount = 0;
+            const uniqueRibIds = new Set();
+            
+            for (let i = 0; i < cycle.length; i++) {
+              const u1 = cycle[i];
+              const v1 = cycle[(i + 1) % cycle.length];
+              
+              const edge = this.edges.find(e => (e[0] === u1 && e[1] === v1) || (e[0] === v1 && e[1] === u1));
+              if (edge) {
+                const type = edge[2];
+                if (type === 'boundary') {
+                  boundaryCount++;
+                } else if (type && type.startsWith('rib_')) {
+                  uniqueRibIds.add(type);
+                }
+              }
+            }
+            
+            if (boundaryCount > 0 && uniqueRibIds.size >= 2) {
+              faces.push(points);
+            }
           }
         }
       }
