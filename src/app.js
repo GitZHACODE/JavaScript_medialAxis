@@ -640,6 +640,54 @@ function draw() {
         }
       }
 
+      // Small beads along standard curves (discs instead of 3D spheres)
+      const regularBeadGeom = new THREE.CircleGeometry(0.12, 16);
+      const regularBeadMat = new THREE.MeshBasicMaterial({ color: 0x6b7280 });
+      for (const p of pts) {
+        const bead = new THREE.Mesh(regularBeadGeom, regularBeadMat);
+        bead.position.set(p.x, p.y, 0.03);
+        meshesGroup.add(bead);
+      }
+    }
+
+    // Draw valence 3+ Junction/End node discs
+    let nodesToDraw = state.simplifySkeleton 
+      ? state.skeletonData.simplifiedNodes 
+      : state.skeletonData.junctionPoints;
+
+    if (state.pruneBranches) {
+      nodesToDraw = nodesToDraw.filter(p => !p.isEndPoint);
+    }
+
+    for (const jp of nodesToDraw) {
+      const rad = jp.isEndPoint ? 0.3 : 0.45; // Meter radius (smaller black circles)
+      const nodeGeom = new THREE.CircleGeometry(rad, 32);
+      const nodeMat = new THREE.MeshBasicMaterial({
+        color: jp.isEndPoint ? 0x4b5563 : 0x374151
+      });
+      const nodeMesh = new THREE.Mesh(nodeGeom, nodeMat);
+      nodeMesh.position.set(jp.x, jp.y, 0.035);
+      meshesGroup.add(nodeMesh);
+
+      // Concentric flat dashed (dotted) circle helper around nodes
+      const circlePts = [];
+      const segments = 32;
+      const circleRadius = rad * 1.65;
+      for (let s = 0; s <= segments; s++) {
+        const theta = (s / segments) * Math.PI * 2;
+        circlePts.push(new THREE.Vector3(jp.x + Math.cos(theta) * circleRadius, jp.y + Math.sin(theta) * circleRadius, 0.035));
+      }
+      const ringGeom = new THREE.BufferGeometry().setFromPoints(circlePts);
+      const ringMat = new THREE.LineDashedMaterial({
+        color: jp.isEndPoint ? 0x4b5563 : 0x374151,
+        transparent: true,
+        opacity: 0.4,
+        dashSize: 0.15,
+        gapSize: 0.1
+      });
+      const ringLine = new THREE.Line(ringGeom, ringMat);
+      ringLine.computeLineDistances();
+      meshesGroup.add(ringLine);
     }
 
     // Render Structural Ribs dropping columns to boundary
@@ -648,7 +696,7 @@ function draw() {
         ? state.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
         : state.skeletonData.simplifiedSegments;
 
-      const beadGeom = new THREE.CircleGeometry(0.4, 16);
+      const beadGeom = new THREE.CircleGeometry(0.15, 16);
       const beadMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // White spine division discs
 
       const ribMat = new THREE.LineBasicMaterial({
@@ -657,7 +705,7 @@ function draw() {
         opacity: 0.65
       });
 
-      const contactGeom = new THREE.CircleGeometry(0.45, 16);
+      const contactGeom = new THREE.CircleGeometry(0.2, 16);
       const contactMat = new THREE.MeshBasicMaterial({ color: 0x4b5563 });
 
       const candidateRibs = [];
