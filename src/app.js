@@ -7,7 +7,7 @@ import { distanceToPolygon, closestPointOnSegment } from './utils/geometry.js';
 // Application State
 const state = {
   polygon: [],
-  activePreset: 'square',
+  activePreset: 'tree',
   samplesPerEdge: 25,
   precision: 1e-5,
   showSkeleton: true,
@@ -280,60 +280,115 @@ function loadPreset(name) {
 
 // Polygon Presets Generators (centered around 0,0 in world space)
 const presets = {
-  square: (w, h) => {
-    const size = Math.min(w, h) * 0.55;
+  cross: (w, h) => {
+    const s = Math.min(w, h);
+    const cx = 0, cy = 0;
     return [
-      new Vector2D(-size / 2, -size / 2),
-      new Vector2D(size / 2, -size / 2),
-      new Vector2D(size / 2, size / 2),
-      new Vector2D(-size / 2, size / 2),
+      new Vector2D(cx - s*0.1, cy + s*0.3),
+      new Vector2D(cx + s*0.1, cy + s*0.3),
+      new Vector2D(cx + s*0.1, cy + s*0.1),
+      new Vector2D(cx + s*0.3, cy + s*0.1),
+      new Vector2D(cx + s*0.3, cy - s*0.1),
+      new Vector2D(cx + s*0.1, cy - s*0.1),
+      new Vector2D(cx + s*0.1, cy - s*0.3),
+      new Vector2D(cx - s*0.1, cy - s*0.3),
+      new Vector2D(cx - s*0.1, cy - s*0.1),
+      new Vector2D(cx - s*0.3, cy - s*0.1),
+      new Vector2D(cx - s*0.3, cy + s*0.1),
+      new Vector2D(cx - s*0.1, cy + s*0.1)
     ];
   },
-  triangle: (w, h) => {
-    const size = Math.min(w, h) * 0.65;
+  yshape: (w, h) => {
+    const s = Math.min(w, h);
+    const cx = 0, cy = 0;
     return [
-      new Vector2D(0, size * 0.45),
-      new Vector2D(size * 0.5, -size * 0.35),
-      new Vector2D(-size * 0.5, -size * 0.35),
+      new Vector2D(cx + s*0.1, cy - s*0.4),
+      new Vector2D(cx + s*0.1, cy - s*0.1),
+      new Vector2D(cx + s*0.4, cy + s*0.4),
+      new Vector2D(cx + s*0.2, cy + s*0.4),
+      new Vector2D(cx,         cy + s*0.1),
+      new Vector2D(cx - s*0.2, cy + s*0.4),
+      new Vector2D(cx - s*0.4, cy + s*0.4),
+      new Vector2D(cx - s*0.1, cy - s*0.1),
+      new Vector2D(cx - s*0.1, cy - s*0.4)
     ];
   },
-  lshape: (w, h) => {
-    const size = Math.min(w, h) * 0.6;
-    const half = size / 2;
-    const inner = size * 0.15;
-    return [
-      new Vector2D(-half, -half),
-      new Vector2D(inner, -half),
-      new Vector2D(inner, inner),
-      new Vector2D(half, inner),
-      new Vector2D(half, half),
-      new Vector2D(-half, half),
+  sqdonut: (w, h) => {
+    const s = Math.min(w, h);
+    const cx = 0, cy = 0;
+    const pts = [
+      new Vector2D(cx - s*0.01, cy + s*0.3),
+      new Vector2D(cx - s*0.3,  cy + s*0.3),
+      new Vector2D(cx - s*0.3,  cy - s*0.3),
+      new Vector2D(cx + s*0.3,  cy - s*0.3),
+      new Vector2D(cx + s*0.3,  cy + s*0.3),
+      new Vector2D(cx + s*0.01, cy + s*0.3),
+      new Vector2D(cx + s*0.01, cy + s*0.1),
+      new Vector2D(cx + s*0.1,  cy + s*0.1),
+      new Vector2D(cx + s*0.1,  cy - s*0.1),
+      new Vector2D(cx - s*0.1,  cy - s*0.1),
+      new Vector2D(cx - s*0.1,  cy + s*0.1),
+      new Vector2D(cx - s*0.01, cy + s*0.1)
     ];
+    pts[0].isBridge = true;
+    pts[5].isBridge = true;
+    pts[6].isBridge = true;
+    pts[11].isBridge = true;
+    return pts;
   },
-  star: (w, h) => {
-    const rOuter = Math.min(w, h) * 0.35;
-    const rInner = rOuter * 0.4;
+  donut: (w, h) => {
+    const s = Math.min(w, h);
+    const cx = 0, cy = 0;
     const points = [];
-    for (let i = 0; i < 10; i++) {
-      const angle = (i * Math.PI) / 5 - Math.PI / 2;
-      const r = i % 2 === 0 ? rOuter : rInner;
-      points.push(new Vector2D(Math.cos(angle) * r, Math.sin(angle) * r));
+    const numSegments = 32;
+    const dTheta = 0.05;
+
+    for (let i = 0; i <= numSegments; i++) {
+      const angle = dTheta + (Math.PI * 2 - 2 * dTheta) * (i / numSegments);
+      points.push(new Vector2D(cx + Math.cos(angle) * s * 0.4, cy - Math.sin(angle) * s * 0.4));
     }
+    for (let i = 0; i <= numSegments; i++) {
+      const angle = (Math.PI * 2 - dTheta) - (Math.PI * 2 - 2 * dTheta) * (i / numSegments);
+      points.push(new Vector2D(cx + Math.cos(angle) * s * 0.2, cy - Math.sin(angle) * s * 0.2));
+    }
+    points[0].isBridge = true;
+    points[numSegments].isBridge = true;
+    points[numSegments + 1].isBridge = true;
+    points[2 * numSegments + 1].isBridge = true;
     return points;
   },
-  crown: (w, h) => {
-    const size = Math.min(w, h) * 0.6;
+  pentagon: (w, h) => {
+    const s = Math.min(w, h);
+    const cx = 0, cy = 0;
     return [
-      new Vector2D(-size * 0.5, -size * 0.2),
-      new Vector2D(-size * 0.3, size * 0.3),
-      new Vector2D(0, -size * 0.05),
-      new Vector2D(size * 0.3, size * 0.3),
-      new Vector2D(size * 0.5, -size * 0.2),
-      new Vector2D(size * 0.45, -size * 0.4),
-      new Vector2D(size * 0.2, -size * 0.1),
-      new Vector2D(0, -size * 0.45),
-      new Vector2D(-size * 0.2, -size * 0.1),
-      new Vector2D(-size * 0.45, -size * 0.4),
+      new Vector2D(cx - s * 0.05, cy + s * 0.4),
+      new Vector2D(cx - s * 0.45, cy + s * 0.15),
+      new Vector2D(cx - s * 0.25, cy - s * 0.4),
+      new Vector2D(cx + s * 0.35, cy - s * 0.35),
+      new Vector2D(cx + s * 0.4,  cy + s * 0.1)
+    ];
+  },
+  tree: (w, h) => {
+    const s = Math.min(w, h);
+    const cx = 0, cy = 0;
+    return [
+      new Vector2D(cx + s*0.1,  cy - s*0.4),
+      new Vector2D(cx + s*0.1,  cy - s*0.1),
+      new Vector2D(cx + s*0.4,  cy - s*0.1),
+      new Vector2D(cx + s*0.4,  cy + s*0.05),
+      new Vector2D(cx + s*0.1,  cy + s*0.05),
+      new Vector2D(cx + s*0.1,  cy + s*0.2),
+      new Vector2D(cx + s*0.3,  cy + s*0.4),
+      new Vector2D(cx + s*0.15, cy + s*0.4),
+      new Vector2D(cx,          cy + s*0.25),
+      new Vector2D(cx - s*0.15, cy + s*0.4),
+      new Vector2D(cx - s*0.3,  cy + s*0.4),
+      new Vector2D(cx - s*0.1,  cy + s*0.2),
+      new Vector2D(cx - s*0.1,  cy + s*0.05),
+      new Vector2D(cx - s*0.4,  cy + s*0.05),
+      new Vector2D(cx - s*0.4,  cy - s*0.1),
+      new Vector2D(cx - s*0.1,  cy - s*0.1),
+      new Vector2D(cx - s*0.1,  cy - s*0.4)
     ];
   }
 };

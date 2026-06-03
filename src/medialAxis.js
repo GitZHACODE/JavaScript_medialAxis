@@ -2,25 +2,85 @@ import { Vector2D } from './utils/vector2d.js';
 import { 
   makeCCW, 
   getInwardNormal, 
-  intersectRayPolygon, 
-  distanceToPolygon 
+  intersectRaySegment,
+  closestPointOnSegment
 } from './utils/geometry.js';
+
+function getEquivalentGovernor(g, polygon) {
+  const N = polygon.length;
+  for (let i = 0; i < N; i++) {
+    const next = (i + 1) % N;
+    if (polygon[i].isBridge && polygon[next].isBridge) {
+      if (g === "E" + ((i - 1 + N) % N)) return "E" + next;
+      if (g === "E" + next) return "E" + ((i - 1 + N) % N);
+      if (g === "V" + i) return "V" + next;
+      if (g === "V" + next) return "V" + i;
+    }
+  }
+  return g;
+}
+
+function areGovernorsEquivalent(ga, gb, polygon) {
+  if (ga === gb) return true;
+  const eqA = getEquivalentGovernor(ga, polygon);
+  if (eqA === gb) return true;
+  return false;
+}
+
+const getGovScore = (ga, gb, n, polygon) => {
+  if (ga === gb) return 1.0;
+  if (areGovernorsEquivalent(ga, gb, polygon)) return 1.0;
+  if (typeof ga !== 'string' || typeof gb !== 'string') return 0;
+  
+  const eqA = getEquivalentGovernor(ga, polygon);
+  const eqB = getEquivalentGovernor(gb, polygon);
+  
+  const idxA = eqA.startsWith('V') ? parseInt(eqA.substring(1)) * 2 : parseInt(eqA.substring(1)) * 2 + 1;
+  const idxB = eqB.startsWith('V') ? parseInt(eqB.substring(1)) * 2 : parseInt(eqB.substring(1)) * 2 + 1;
+  
+  const d = Math.min(Math.abs(idxA - idxB), 2 * n - Math.abs(idxA - idxB));
+  
+  if (d === 1) return 0.5; 
+  return 0;
+};
 
 export class MedialAxisTransform {
   constructor(polygonVertices, options = {}) {
-    this.polygon = makeCCW(polygonVertices.map(v => new Vector2D(v.x, v.y)));
+    this.polygon = makeCCW(polygonVertices.map(v => {
+      const vec = new Vector2D(v.x, v.y);
+      if (v.isBridge) vec.isBridge = true;
+      return vec;
+    }));
     this.epsilon = options.epsilon || 1e-5;
     this.tangentEpsilon = options.tangentEpsilon || 1e-4;
   }
 
-  // A circle centered at 'center' with 'radius' is contained in the polygon if
-  // its distance to the boundary is at least 'radius' (with tolerance).
+  distanceToPolygonExcludingBridges(point) {
+    let minDist = Infinity;
+    let closestPt = null;
+    let closestEdgeIdx = -1;
+
+    for (let i = 0; i < this.polygon.length; i++) {
+      const v1 = this.polygon[i];
+      const v2 = this.polygon[(i + 1) % this.polygon.length];
+      if (v1.isBridge && v2.isBridge) continue; // Skip bridge edges
+      
+      const pt = closestPointOnSegment(point, v1, v2);
+      const dist = point.dist(pt);
+      if (dist < minDist) {
+        minDist = dist;
+        closestPt = pt;
+        closestEdgeIdx = i;
+      }
+    }
+    return { distance: minDist, point: closestPt, edgeIndex: closestEdgeIdx };
+  }
+
   containsBall(center, radius) {
-    const { distance } = distanceToPolygon(center, this.polygon);
+    const { distance } = this.distanceToPolygonExcludingBridges(center);
     return distance >= radius - this.epsilon;
   }
 
-  // Bisection search along the inward normal to find the unique maximal inscribed circle tangent to P.
   computeMedialPoint(P, Q) {
     let P_prime = P;
     let Q_prime = Q;
@@ -41,306 +101,326 @@ export class MedialAxisTransform {
     return midPoint;
   }
 
-  // Evaluates the governors (tangent edges/vertices) of a medial point M
-  // and assigns a normalized net vector representing the direction of the branch.
-  computeEffectiveNormal(M, radius) {
-    let sumNormals = new Vector2D(0, 0);
-    let governorsCount = 0;
-    let firstGovernorNormal = null;
-
-    for (let i = 0; i < this.polygon.length; i++) {
-      const v1 = this.polygon[i];
-      const v2 = this.polygon[(i + 1) % this.polygon.length];
-      
-      const { point: closestPt, distance } = distanceToPolygon(M, [v1, v2]);
-      
-      // If the edge is tangent (within epsilon) to the inscribed circle
-      if (Math.abs(distance - radius) < this.tangentEpsilon) {
-        const norm = M.sub(closestPt).normalize();
-        sumNormals = sumNormals.add(norm);
-        governorsCount++;
-        if (!firstGovernorNormal) firstGovernorNormal = norm;
-      }
-    }
-
-    if (sumNormals.length() < 1e-6) {
-      // If normals sum to zero, assign the normal of the first governor
-      M.effectiveNormal = firstGovernorNormal || new Vector2D(0, 0);
-    } else {
-      M.effectiveNormal = sumNormals.normalize();
-    }
-  }
-
-  // Isolates a junction point between two regular medial points M1 and M2 using bisection.
-  computeJunctionPoint(M1, M2) {
-    let p = M1;
-    let q = M2;
-    let midPoint = p.add(q).scale(0.5);
-
-    while (p.dist(q) > this.epsilon) {
-      // Find closest boundary point to midpoint
-      const { point: basePoint } = distanceToPolygon(midPoint, this.polygon);
-      
-      // Find edge inward normal at base point
-      const { edgeIndex } = distanceToPolygon(basePoint, this.polygon);
-      const v1 = this.polygon[edgeIndex];
-      const v2 = this.polygon[(edgeIndex + 1) % this.polygon.length];
-      const inwardNorm = getInwardNormal(v1, v2);
-
-      // Cast ray and intersect with boundary
-      const intersectionPoint = intersectRayPolygon(basePoint, inwardNorm, this.polygon);
-      if (!intersectionPoint) break;
-
-      // Compute medial point and its effective normal
-      const junctionPoint = this.computeMedialPoint(basePoint, intersectionPoint);
-      this.computeEffectiveNormal(junctionPoint, junctionPoint.radius);
-
-      // Decide which half to search based on dot product of effective normals
-      const dotP = junctionPoint.effectiveNormal.dot(M1.effectiveNormal);
-      const dotQ = junctionPoint.effectiveNormal.dot(M2.effectiveNormal);
-
-      if (dotP > dotQ) {
-        p = midPoint;
-      } else {
-        q = midPoint;
-      }
-      midPoint = p.add(q).scale(0.5);
-    }
-
-    return midPoint;
-  }
-
-  // Fast Randomized Medial Axis (Figure 3 in paper)
-  computeRandomSamples(numSamples) {
-    const medialPoints = [];
-    
-    // Compute total perimeter to sample uniformly by edge lengths
-    const edgeLengths = [];
-    let perimeter = 0;
-    for (let i = 0; i < this.polygon.length; i++) {
-      const v1 = this.polygon[i];
-      const v2 = this.polygon[(i + 1) % this.polygon.length];
-      const len = v1.dist(v2);
-      edgeLengths.push(len);
-      perimeter += len;
-    }
-
-    for (let s = 0; s < numSamples; s++) {
-      // Sample a random point along the perimeter
-      let randD = Math.random() * perimeter;
-      let edgeIdx = 0;
-      while (randD > edgeLengths[edgeIdx] && edgeIdx < this.polygon.length - 1) {
-        randD -= edgeLengths[edgeIdx];
-        edgeIdx++;
-      }
-
-      const v1 = this.polygon[edgeIdx];
-      const v2 = this.polygon[(edgeIdx + 1) % this.polygon.length];
-      const edgeVec = v2.sub(v1).normalize();
-      const basePoint = v1.add(edgeVec.scale(randD));
-      const inwardNorm = getInwardNormal(v1, v2);
-
-      const intersectionPoint = intersectRayPolygon(basePoint, inwardNorm, this.polygon);
-      if (intersectionPoint) {
-        const mPoint = this.computeMedialPoint(basePoint, intersectionPoint);
-        medialPoints.push(mPoint);
-      }
-    }
-
-    return medialPoints;
-  }
-
-  // Structured Medial Axis with Junction Isolation (Figure 8 in paper)
+  // Structured Medial Axis with Junction Isolation and Bridge seam ignoring
   computeStructuredSkeleton(samplesPerEdge) {
     const regularPoints = [];
     const junctionPoints = [];
+    const N = this.polygon.length;
 
-    // 1. Sample along each edge, trace branches, and detect transitions
-    for (let i = 0; i < this.polygon.length; i++) {
-      const v1 = this.polygon[i];
-      const v2 = this.polygon[(i + 1) % this.polygon.length];
-      const inwardNorm = getInwardNormal(v1, v2);
-      const edgeVec = v2.sub(v1);
+    // 0. Classify Polygon Vertices as Convex or Concave
+    const vertexTypes = this.polygon.map((curr, i) => {
+      const prevIdx = (i - 1 + N) % N;
+      const nextIdx = (i + 1) % N;
+      const prevVec = curr.sub(this.polygon[prevIdx]);
+      const nextVec = this.polygon[nextIdx].sub(curr);
+      const cross = prevVec.cross(nextVec);
+      return cross >= 0 ? 'CONVEX' : 'CONCAVE';
+    });
 
-      const edgePoints = [];
+    // 1. Ray generation
+    let totalLength = 0;
+    for (let i = 0; i < N; i++) {
+      const next = (i + 1) % N;
+      if (!(this.polygon[i].isBridge && this.polygon[next].isBridge)) {
+        totalLength += this.polygon[i].dist(this.polygon[next]);
+      }
+    }
 
-      for (let j = 0; j < samplesPerEdge; j++) {
-        const t = (j + 1) / (samplesPerEdge + 1);
-        const basePoint = v1.add(edgeVec.scale(t));
+    const numEdges = this.polygon.filter((p, idx) => {
+      const next = this.polygon[(idx + 1) % N];
+      return !(p.isBridge && next.isBridge);
+    }).length;
+    const numSamples = samplesPerEdge * numEdges;
 
-        const intersectionPoint = intersectRayPolygon(basePoint, inwardNorm, this.polygon);
+    const rawMedialPoints = [];
+
+    for (let i = 0; i < N; i++) {
+      const p1 = this.polygon[i];
+      const p2 = this.polygon[(i + 1) % N];
+      if (p1.isBridge && p2.isBridge) continue; // Skip bridge edges
+
+      const len = p1.dist(p2);
+      if (len === 0) continue;
+      const normal = getInwardNormal(p1, p2);
+
+      let numPoints = Math.max(5, Math.floor((len / totalLength) * numSamples));
+      if (numPoints % 2 !== 0) numPoints += 1; // Force even number of points to guarantee exact midpoint ray
+
+      for (let k = 1; k < numPoints; k++) {
+        const rayOrigin = p1.add(p2.sub(p1).scale(k / numPoints));
+        
+        let intersectionPoint = null;
+        let minT = Infinity;
+        for (let j = 0; j < N; j++) {
+          const c = this.polygon[j];
+          const d = this.polygon[(j + 1) % N];
+          if (c.isBridge && d.isBridge) continue; // Skip bridge edges
+          
+          const hit = intersectRaySegment(rayOrigin, normal, c, d);
+          if (hit && hit.s < minT) {
+            minT = hit.s;
+            intersectionPoint = hit.point;
+          }
+        }
+
         if (intersectionPoint) {
-          const medialPoint = this.computeMedialPoint(basePoint, intersectionPoint);
-          this.computeEffectiveNormal(medialPoint, medialPoint.radius);
+          const mp = this.computeMedialPoint(rayOrigin, intersectionPoint);
+          rawMedialPoints.push(mp);
+        }
+      }
+    }
+
+    // 2. Identify Governors for each medial point
+    rawMedialPoints.forEach(mp => {
+      mp.governors = new Set();
+      for (let j = 0; j < N; j++) {
+        const a = this.polygon[j];
+        const b = this.polygon[(j + 1) % N];
+        if (a.isBridge && b.isBridge) continue; // Skip bridge edges
+
+        const cp = closestPointOnSegment(mp, a, b);
+        const d = mp.dist(cp);
+        
+        const tol = Math.max(2.0, mp.radius * 0.05);
+        if (Math.abs(d - mp.radius) < tol) {
+          const v1 = b.sub(a);
+          const len = v1.length();
+          const lineDist = len === 0 ? d : Math.abs((mp.x - a.x) * v1.y - (mp.y - a.y) * v1.x) / len;
           
-          edgePoints.push(medialPoint);
-          regularPoints.push(medialPoint);
+          if (Math.abs(lineDist - mp.radius) < tol) {
+            mp.governors.add("E" + j);
+          }
+          if (cp.dist(a) < 0.05 * len && vertexTypes[j] === 'CONCAVE') {
+            mp.governors.add("V" + j);
+          } else if (cp.dist(b) < 0.05 * len && vertexTypes[(j + 1) % N] === 'CONCAVE') {
+            mp.governors.add("V" + ((j + 1) % N));
+          }
+        }
+      }
+    });
 
-          // If we have at least 2 points along this edge's branch, check for governor transitions
-          if (edgePoints.length > 1) {
-            const p1 = edgePoints[edgePoints.length - 2];
-            const p2 = edgePoints[edgePoints.length - 1];
-
-            // Cross product of effective normals
-            const crossVal = p1.effectiveNormal.cross(p2.effectiveNormal);
-            if (Math.abs(crossVal) > 1e-4) {
-              const jPoint = this.computeJunctionPoint(p1, p2);
-              junctionPoints.push(jPoint);
-            }
+    // 3. Filter shallow curves (Generalized Medial Point Filter)
+    const filteredMedialPoints = rawMedialPoints.filter(mp => {
+      let contactVectors = [];
+      for (let j = 0; j < N; j++) {
+        if (mp.governors.has("E" + j) || mp.governors.has("V" + j)) {
+          const a = this.polygon[j];
+          const b = this.polygon[(j + 1) % N];
+          const cp = mp.governors.has("V" + j) ? a : closestPointOnSegment(mp, a, b);
+          const cv = cp.sub(mp).normalize();
+          if (cv.lengthSq() > 1e-6) {
+            contactVectors.push(cv);
           }
         }
       }
 
-      // 2. Append Convex Vertices as End Points (where radius = 0)
-      const nextEdgeIdx = (i + 1) % this.polygon.length;
-      const v3 = this.polygon[(i + 2) % this.polygon.length];
-      const e1 = v2.sub(v1);
-      const e2 = v3.sub(v2);
-      
-      // If cross product is positive in CCW, it is a convex vertex (end point of the medial axis)
-      if (e1.cross(e2) > 0) {
-        const endPoint = new Vector2D(v2.x, v2.y);
-        endPoint.radius = 0;
-        endPoint.isEndPoint = true;
-        junctionPoints.push(endPoint);
+      if (contactVectors.length < 2) return true;
+
+      let minDot = 1.0;
+      for (let i = 0; i < contactVectors.length; i++) {
+        for (let j = i + 1; j < contactVectors.length; j++) {
+          const dot = contactVectors[i].dot(contactVectors[j]);
+          minDot = Math.min(minDot, dot);
+        }
       }
-    }
+      return minDot < 0.92;
+    });
 
-    // 1b. Sample along each vertex angle bisector to trace deep interior branches (e.g. for star shapes)
-    for (let i = 0; i < this.polygon.length; i++) {
-      const vPrev = this.polygon[(i - 1 + this.polygon.length) % this.polygon.length];
-      const vCurr = this.polygon[i];
-      const vNext = this.polygon[(i + 1) % this.polygon.length];
+    regularPoints.push(...filteredMedialPoints);
 
-      const n1 = getInwardNormal(vPrev, vCurr);
-      const n2 = getInwardNormal(vCurr, vNext);
-      const bisectNorm = n1.add(n2).normalize();
+    // 4. Setup explicitly preserved EndPoints (sharp convex corners, excluding bridge vertices)
+    for (let i = 0; i < N; i++) {
+      if (vertexTypes[i] === 'CONVEX' && !this.polygon[i].isBridge) {
+        const prevIdx = (i - 1 + N) % N;
+        const nextIdx = (i + 1) % N;
+        const pPrev = this.polygon[prevIdx];
+        const pCurr = this.polygon[i];
+        const pNext = this.polygon[nextIdx];
 
-      if (bisectNorm.lengthSq() < 1e-6) continue; // Skip collinear flat vertices
+        const v1 = pPrev.sub(pCurr).normalize();
+        const v2 = pNext.sub(pCurr).normalize();
+        const dot = v1.dot(v2);
 
-      // Cast ray along the vertex bisector
-      const intersectionPoint = intersectRayPolygon(vCurr, bisectNorm, this.polygon);
-      if (intersectionPoint) {
-        const bisectVec = intersectionPoint.sub(vCurr);
-        const bisectPoints = [];
-
-        // Sample points along the bisector segment
-        for (let j = 0; j < samplesPerEdge; j++) {
-          const t = (j + 1) / (samplesPerEdge + 1);
-          const samplePt = vCurr.add(bisectVec.scale(t));
-
-          // Find the closest boundary point to the bisector sample
-          const { point: basePoint } = distanceToPolygon(samplePt, this.polygon);
-          const { edgeIndex } = distanceToPolygon(basePoint, this.polygon);
-          
-          if (edgeIndex !== -1) {
-            const ev1 = this.polygon[edgeIndex];
-            const ev2 = this.polygon[(edgeIndex + 1) % this.polygon.length];
-            const inwardNorm = getInwardNormal(ev1, ev2);
-
-            const hitPoint = intersectRayPolygon(basePoint, inwardNorm, this.polygon);
-            if (hitPoint) {
-              const medialPoint = this.computeMedialPoint(basePoint, hitPoint);
-              this.computeEffectiveNormal(medialPoint, medialPoint.radius);
-              
-              bisectPoints.push(medialPoint);
-              regularPoints.push(medialPoint);
-
-              // Check for governor transitions along the bisector branch
-              if (bisectPoints.length > 1) {
-                const p1 = bisectPoints[bisectPoints.length - 2];
-                const p2 = bisectPoints[bisectPoints.length - 1];
-
-                const crossVal = p1.effectiveNormal.cross(p2.effectiveNormal);
-                if (Math.abs(crossVal) > 1e-4) {
-                  const jPoint = this.computeJunctionPoint(p1, p2);
-                  junctionPoints.push(jPoint);
-                }
-              }
-            }
-          }
+        const isSharpCorner = dot > -0.92;
+        if (isSharpCorner) {
+          const endPoint = new Vector2D(pCurr.x, pCurr.y);
+          endPoint.radius = 0;
+          endPoint.isEndPoint = true;
+          endPoint.governors = new Set(["E" + prevIdx, "V" + i, "E" + i]);
+          junctionPoints.push(endPoint);
         }
       }
     }
+
+    // 5. Cluster dense point cloud to identify internal junction nodes
+    const internalNodes = [];
+    filteredMedialPoints.forEach(mp => {
+      let found = false;
+      for (const n of internalNodes) {
+        let score = 0;
+        mp.governors.forEach(ga => n.governors.forEach(gb => {
+          score += getGovScore(ga, gb, N, this.polygon);
+        }));
+        
+        if (score >= 1.0 && mp.dist(n) < 25) {
+          n.x = (n.x * n.count + mp.x) / (n.count + 1);
+          n.y = (n.y * n.count + mp.y) / (n.count + 1);
+          n.radius = (n.radius * n.count + mp.radius) / (n.count + 1);
+          n.count++;
+          mp.governors.forEach(g => n.governors.add(g));
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        const node = new Vector2D(mp.x, mp.y);
+        node.governors = new Set(mp.governors);
+        node.count = 1;
+        node.isEndPoint = false;
+        node.radius = mp.radius;
+        internalNodes.push(node);
+      }
+    });
+
+    junctionPoints.push(...internalNodes);
 
     return { regularPoints, junctionPoints };
   }
 
-  // Simplifies the medial axis into straight lines directly connecting valence 3 nodes (junctions) 
-  // and valence 1 nodes (convex boundary end points), bypassing valence 2 intermediate regular points.
-  // Performs distance-based greedy clustering to merge raw junction points that are close to each other,
-  // and connects the resulting nodes using Kruskal's Minimum Spanning Tree (MST) on the internal visibility graph.
+  // Simplifies the medial axis using Relative Neighborhood Graph and edge contraction.
   simplifySkeleton(regularPoints, junctionPoints, mergeThreshold = 20) {
-    // 1. Separate end points (valence 1) from raw isolated junctions
     const endPoints = junctionPoints.filter(p => p.isEndPoint);
-    const rawJunctions = junctionPoints.filter(p => !p.isEndPoint);
+    const nodes = endPoints.map(p => {
+      const node = new Vector2D(p.x, p.y);
+      node.governors = new Set(p.governors);
+      node.isEndPoint = true;
+      node.count = 1;
+      node.radius = 0;
+      return node;
+    });
 
-    // 2. Perform distance-based greedy clustering on junction points to merge close vertices
-    const clusters = [];
-    for (const j of rawJunctions) {
-      let added = false;
-      for (const cluster of clusters) {
-        // Calculate centroid of current cluster
-        let sumX = 0, sumY = 0;
-        for (const p of cluster) {
-          sumX += p.x;
-          sumY += p.y;
-        }
-        const centroid = new Vector2D(sumX / cluster.length, sumY / cluster.length);
+    // 1. Cluster dense point cloud with average radius tracking
+    regularPoints.forEach(mp => {
+      let found = false;
+      for (const n of nodes) {
+        if (n.isEndPoint) continue;
         
-        if (j.dist(centroid) < mergeThreshold) {
-          cluster.push(j);
-          added = true;
+        let score = 0;
+        mp.governors.forEach(ga => n.governors.forEach(gb => {
+          score += getGovScore(ga, gb, this.polygon.length, this.polygon);
+        }));
+        
+        if (score >= 1.0 && mp.dist(n) < 25) {
+          n.x = (n.x * n.count + mp.x) / (n.count + 1);
+          n.y = (n.y * n.count + mp.y) / (n.count + 1);
+          n.radius = (n.radius * n.count + mp.radius) / (n.count + 1);
+          n.count++;
+          mp.governors.forEach(g => n.governors.add(g));
+          found = true;
           break;
         }
       }
-      if (!added) {
-        clusters.push([j]);
+      if (!found) {
+        const node = new Vector2D(mp.x, mp.y);
+        node.governors = new Set(mp.governors);
+        node.count = 1;
+        node.isEndPoint = false;
+        node.radius = mp.radius;
+        nodes.push(node);
+      }
+    });
+
+    // 2. Build Relative Neighborhood Graph (RNG)
+    const adj = nodes.map(() => new Set());
+    const validPairs = [];
+    
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        let score = 0;
+        nodes[i].governors.forEach(ga => nodes[j].governors.forEach(gb => {
+          score += getGovScore(ga, gb, this.polygon.length, this.polygon);
+        }));
+        if (score >= 1.0) {
+          validPairs.push({ i, j, distSq: nodes[i].distSq(nodes[j]) });
+        }
       }
     }
 
-    // 3. Compute centroid nodes for each cluster
-    const mergedJunctions = clusters.map(cluster => {
-      let sumX = 0, sumY = 0, sumR = 0;
-      let sumNx = 0, sumNy = 0;
-      for (const p of cluster) {
-        sumX += p.x;
-        sumY += p.y;
-        sumR += p.radius;
-        if (p.effectiveNormal) {
-          sumNx += p.effectiveNormal.x;
-          sumNy += p.effectiveNormal.y;
+    for (const pair of validPairs) {
+      let isRNG = true;
+      for (let k = 0; k < nodes.length; k++) {
+        if (k === pair.i || k === pair.j) continue;
+        
+        if (nodes[pair.i].distSq(nodes[k]) < pair.distSq - 0.01 && 
+            nodes[k].distSq(nodes[pair.j]) < pair.distSq - 0.01) {
+          
+          let scoreK_i = 0, scoreK_j = 0;
+          nodes[k].governors.forEach(ga => nodes[pair.i].governors.forEach(gb => {
+            scoreK_i += getGovScore(ga, gb, this.polygon.length, this.polygon);
+          }));
+          nodes[k].governors.forEach(ga => nodes[pair.j].governors.forEach(gb => {
+            scoreK_j += getGovScore(ga, gb, this.polygon.length, this.polygon);
+          }));
+          
+          if (scoreK_i >= 1.0 && scoreK_j >= 1.0) {
+             isRNG = false;
+             break;
+          }
         }
       }
-      const centroid = new Vector2D(sumX / cluster.length, sumY / cluster.length);
-      centroid.radius = sumR / cluster.length;
-      centroid.effectiveNormal = new Vector2D(
-        sumNx / cluster.length,
-        sumNy / cluster.length
-      ).normalize();
-      centroid.isEndPoint = false;
-      return centroid;
-    });
-
-    // Combined set of all nodes (exact convex end points + merged junction centroids)
-    const allNodes = [...endPoints, ...mergedJunctions];
-
-    if (allNodes.length === 0) return { segments: [], nodes: [] };
-
-    // Point-in-polygon helper
-    const isPointInPolygon = (pt, poly) => {
-      let inside = false;
-      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const xi = poly[i].x, yi = poly[i].y;
-        const xj = poly[j].x, yj = poly[j].y;
-        const intersect = ((yi > pt.y) !== (yj > pt.y))
-            && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi);
-        if (intersect) inside = !inside;
+      if (isRNG) {
+        adj[pair.i].add(pair.j);
+        adj[pair.j].add(pair.i);
       }
-      return inside;
-    };
+    }
 
-    // Segment visibility check inside polygon (with endpoint inset buffer)
+    const active = nodes.map(() => true);
+
+    // 3. Edge Contraction: Scale-aware collapsing of tight micro-edges
+    let collapsed = true;
+    while (collapsed) {
+      collapsed = false;
+      for (let i = 0; i < nodes.length; i++) {
+        if (!active[i]) continue;
+        for (const j of Array.from(adj[i])) {
+          if (!active[j] || i >= j) continue;
+          
+          const avgRadius = (nodes[i].radius + nodes[j].radius) / 2;
+          const collapseThreshold = Math.max(mergeThreshold, avgRadius * 0.4);
+
+          if (nodes[i].dist(nodes[j]) < collapseThreshold) {
+            if (nodes[i].isEndPoint && nodes[j].isEndPoint) continue;
+            
+            const target = nodes[i].isEndPoint ? i : (nodes[j].isEndPoint ? j : i);
+            const source = target === i ? j : i;
+
+            if (!nodes[target].isEndPoint) {
+              nodes[target].x = (nodes[target].x * nodes[target].count + nodes[source].x * nodes[source].count) / (nodes[target].count + nodes[source].count);
+              nodes[target].y = (nodes[target].y * nodes[target].count + nodes[source].y * nodes[source].count) / (nodes[target].count + nodes[source].count);
+              nodes[target].radius = (nodes[target].radius * nodes[target].count + nodes[source].radius * nodes[source].count) / (nodes[target].count + nodes[source].count);
+              nodes[target].count += nodes[source].count;
+            }
+            nodes[source].governors.forEach(g => nodes[target].governors.add(g));
+
+            adj[source].forEach(n => {
+              if (n !== target) {
+                adj[n].delete(source);
+                adj[n].add(target);
+                adj[target].add(n);
+              }
+            });
+            adj[target].delete(source);
+            active[source] = false;
+            adj[source].clear();
+            collapsed = true;
+            break;
+          }
+        }
+        if (collapsed) break;
+      }
+    }
+
+    // 4. Robustness Fallback / Bridge Loop Connection: Connect disjoint components using visible node-pairs
     const isSegmentVisible = (a, b) => {
       const shrink = 1e-3;
       const dx = b.x - a.x;
@@ -351,40 +431,17 @@ export class MedialAxisTransform {
       for (let i = 0; i < this.polygon.length; i++) {
         const c = this.polygon[i];
         const d = this.polygon[(i + 1) % this.polygon.length];
+        if (c.isBridge && d.isBridge) continue; // Skip bridge edges
         
         const ccw = (p, q, r) => (r.y - p.y) * (q.x - p.x) > (q.y - p.y) * (r.x - p.x);
         const intersect = (ccw(aPrime, c, d) !== ccw(bPrime, c, d)) && (ccw(aPrime, bPrime, c) !== ccw(aPrime, bPrime, d));
         
         if (intersect) return false;
       }
-
-      const mid = a.add(b).scale(0.5);
-      return isPointInPolygon(mid, this.polygon);
+      return true;
     };
 
-    // 4. Generate all candidate visible edges between nodes
-    const candidateEdges = [];
-    for (let i = 0; i < allNodes.length; i++) {
-      for (let j = i + 1; j < allNodes.length; j++) {
-        const u = allNodes[i];
-        const v = allNodes[j];
-        if (isSegmentVisible(u, v)) {
-          candidateEdges.push({
-            i,
-            j,
-            u,
-            v,
-            weight: u.distSq(v),
-          });
-        }
-      }
-    }
-
-    // 5. Build Minimum Spanning Tree using Kruskal's algorithm
-    candidateEdges.sort((a, b) => a.weight - b.weight);
-
-    // Union-Find data structure
-    const parent = Array.from({ length: allNodes.length }, (_, idx) => idx);
+    const parent = Array.from({ length: nodes.length }, (_, idx) => idx);
     const find = (x) => {
       if (parent[x] === x) return x;
       return parent[x] = find(parent[x]);
@@ -399,87 +456,113 @@ export class MedialAxisTransform {
       return false;
     };
 
-    const simplifiedSegments = [];
-    for (const edge of candidateEdges) {
-      if (union(edge.i, edge.j)) {
-        simplifiedSegments.push({ start: edge.u, end: edge.v });
+    for (let i = 0; i < nodes.length; i++) {
+      if (!active[i]) continue;
+      for (const neighbor of adj[i]) {
+        if (active[neighbor] && i < neighbor) {
+          union(i, neighbor);
+        }
       }
     }
 
-    // 6. Robustness Fallback: If the visibility graph is disconnected,
-    // connect any remaining disjoint components using visible node-pairs.
-    for (let i = 0; i < allNodes.length; i++) {
-      for (let j = 0; j < allNodes.length; j++) {
-        if (i === j) continue;
+    for (let i = 0; i < nodes.length; i++) {
+      if (!active[i]) continue;
+      for (let j = i + 1; j < nodes.length; j++) {
+        if (!active[j]) continue;
         if (find(i) !== find(j)) {
-          const u = allNodes[i];
-          const v = allNodes[j];
-          if (isSegmentVisible(u, v)) {
+          if (isSegmentVisible(nodes[i], nodes[j])) {
             union(i, j);
-            simplifiedSegments.push({ start: u, end: v });
+            adj[i].add(j);
+            adj[j].add(i);
           }
         }
       }
     }
 
-    // 7. Post-Simplification: Iteratively delete intermediate valence 2 vertices to straighten paths
+    // 5. Intelligent Pruning & Collapsing (Douglas-Peucker & Topological Redundancy)
+    const distToSegment = (p, v, w) => {
+      const v_vec = w.sub(v);
+      const w_vec = p.sub(v);
+      const lenSq = v_vec.lengthSq();
+      if (lenSq < 1e-10) return p.dist(v);
+      let t = w_vec.dot(v_vec) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+      const proj = v.add(v_vec.scale(t));
+      return p.dist(proj);
+    };
+
     let changed = true;
     while (changed) {
       changed = false;
-      
-      const neighbors = new Map();
-      const addNeighbor = (n1, n2) => {
-        if (!neighbors.has(n1)) neighbors.set(n1, new Set());
-        neighbors.get(n1).add(n2);
-      };
-      
-      for (const seg of simplifiedSegments) {
-        addNeighbor(seg.start, seg.end);
-        addNeighbor(seg.end, seg.start);
-      }
-      
-      let targetNode = null;
-      for (const [node, nbSet] of neighbors.entries()) {
-        // Only delete non-end point nodes that have exactly 2 neighbors
-        if (nbSet.size === 2 && !node.isEndPoint) {
-          targetNode = node;
-          break;
-        }
-      }
-      
-      if (targetNode) {
-        const nbs = Array.from(neighbors.get(targetNode));
-        const n1 = nbs[0];
-        const n2 = nbs[1];
-        
-        // Remove segments containing targetNode
-        for (let idx = simplifiedSegments.length - 1; idx >= 0; idx--) {
-          const seg = simplifiedSegments[idx];
-          if (seg.start === targetNode || seg.end === targetNode) {
-            simplifiedSegments.splice(idx, 1);
+      for (let i = 0; i < nodes.length; i++) {
+        if (!active[i] || nodes[i].isEndPoint) continue;
+
+        if (adj[i].size === 2) {
+          const neighbors = Array.from(adj[i]);
+          const n1 = neighbors[0];
+          const n2 = neighbors[1];
+
+          const node1 = nodes[n1];
+          const node2 = nodes[n2];
+          const curr = nodes[i];
+
+          const v1 = node1.sub(curr).normalize();
+          const v2 = node2.sub(curr).normalize();
+          const dotProduct = v1.dot(v2);
+          const dToLine = distToSegment(curr, node1, node2);
+
+          let hasUniqueGov = false;
+          for (const g of curr.governors) {
+            if (!node1.governors.has(g) && !node2.governors.has(g)) {
+              hasUniqueGov = true;
+              break;
+            }
           }
+
+          if (dotProduct < -0.95 || dToLine < 5 || !hasUniqueGov) {
+            adj[n1].delete(i);
+            adj[n2].delete(i);
+
+            if (n1 !== n2) {
+              adj[n1].add(n2);
+              adj[n2].add(n1);
+            }
+
+            active[i] = false;
+            adj[i].clear();
+            changed = true;
+          }
+        } else if (adj[i].size <= 1) {
+          const neighbors = Array.from(adj[i]);
+          if (neighbors.length === 1) {
+            adj[neighbors[0]].delete(i);
+          }
+          active[i] = false;
+          adj[i].clear();
+          changed = true;
         }
-        
-        // Connect n1 and n2 directly
-        const exists = simplifiedSegments.some(seg => 
-          (seg.start === n1 && seg.end === n2) ||
-          (seg.start === n2 && seg.end === n1)
-        );
-        if (!exists && n1 !== n2) {
-          simplifiedSegments.push({ start: n1, end: n2 });
-        }
-        
-        // Remove targetNode from allNodes list so the visualizer doesn't draw a junction circle there
-        const nodeIdx = allNodes.indexOf(targetNode);
-        if (nodeIdx !== -1) {
-          allNodes.splice(nodeIdx, 1);
-        }
-        
-        changed = true;
       }
     }
 
-    return { segments: simplifiedSegments, nodes: allNodes };
+    // 6. Collect final segments and active nodes
+    const finalSegments = [];
+    for (let i = 0; i < nodes.length; i++) {
+      if (!active[i]) continue;
+      for (const neighbor of adj[i]) {
+        if (i < neighbor) {
+          finalSegments.push({ start: nodes[i], end: nodes[neighbor] });
+        }
+      }
+    }
+
+    const finalNodes = nodes.filter((_, idx) => active[idx]);
+    for (let i = 0; i < nodes.length; i++) {
+      if (active[i]) {
+        nodes[i].isJunction = adj[i].size >= 3;
+      }
+    }
+
+    return { segments: finalSegments, nodes: finalNodes };
   }
 
   // Computes exact convex Voronoi cells for a list of seeds, bounded by a large box.
