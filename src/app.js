@@ -316,7 +316,7 @@ const presets = {
   sqdonut: (w, h) => {
     const s = Math.min(w, h);
     const cx = 0, cy = 0;
-    const pts = [
+    return [
       new Vector2D(cx - s*0.01, cy + s*0.3),
       new Vector2D(cx - s*0.3,  cy + s*0.3),
       new Vector2D(cx - s*0.3,  cy - s*0.3),
@@ -330,11 +330,6 @@ const presets = {
       new Vector2D(cx - s*0.1,  cy + s*0.1),
       new Vector2D(cx - s*0.01, cy + s*0.1)
     ];
-    pts[0].isBridge = true;
-    pts[5].isBridge = true;
-    pts[6].isBridge = true;
-    pts[11].isBridge = true;
-    return pts;
   },
   donut: (w, h) => {
     const s = Math.min(w, h);
@@ -351,10 +346,6 @@ const presets = {
       const angle = (Math.PI * 2 - dTheta) - (Math.PI * 2 - 2 * dTheta) * (i / numSegments);
       points.push(new Vector2D(cx + Math.cos(angle) * s * 0.2, cy - Math.sin(angle) * s * 0.2));
     }
-    points[0].isBridge = true;
-    points[numSegments].isBridge = true;
-    points[numSegments + 1].isBridge = true;
-    points[2 * numSegments + 1].isBridge = true;
     return points;
   },
   pentagon: (w, h) => {
@@ -405,7 +396,7 @@ function recomputeMAT() {
   
   // Initialize MAT with user tolerances
   const mat = new MedialAxisTransform(state.polygon, {
-    epsilon: state.precision,
+    epsilon: state.activePreset !== 'custom' ? 0.5 : state.precision,
     tangentEpsilon: state.precision * 10.0,
   });
 

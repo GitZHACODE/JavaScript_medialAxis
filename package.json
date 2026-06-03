@@ -9,7 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node scratch/test-mat.js",
-    "test:symmetry": "node scratch/test_donut_symmetry.js"
+    "test:presets": "node scratch/test_all_presets.js"
   },
   "keywords": [
     "medial-axis",

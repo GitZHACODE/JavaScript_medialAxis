@@ -3,40 +3,16 @@ import {
   makeCCW, 
   getInwardNormal, 
   intersectRaySegment,
-  closestPointOnSegment
+  closestPointOnSegment,
+  distanceToPolygon
 } from './utils/geometry.js';
 
-function getEquivalentGovernor(g, polygon) {
-  const N = polygon.length;
-  for (let i = 0; i < N; i++) {
-    const next = (i + 1) % N;
-    if (polygon[i].isBridge && polygon[next].isBridge) {
-      if (g === "E" + ((i - 1 + N) % N)) return "E" + next;
-      if (g === "E" + next) return "E" + ((i - 1 + N) % N);
-      if (g === "V" + i) return "V" + next;
-      if (g === "V" + next) return "V" + i;
-    }
-  }
-  return g;
-}
-
-function areGovernorsEquivalent(ga, gb, polygon) {
-  if (ga === gb) return true;
-  const eqA = getEquivalentGovernor(ga, polygon);
-  if (eqA === gb) return true;
-  return false;
-}
-
-const getGovScore = (ga, gb, n, polygon) => {
+const getGovScore = (ga, gb, n) => {
   if (ga === gb) return 1.0;
-  if (areGovernorsEquivalent(ga, gb, polygon)) return 1.0;
   if (typeof ga !== 'string' || typeof gb !== 'string') return 0;
   
-  const eqA = getEquivalentGovernor(ga, polygon);
-  const eqB = getEquivalentGovernor(gb, polygon);
-  
-  const idxA = eqA.startsWith('V') ? parseInt(eqA.substring(1)) * 2 : parseInt(eqA.substring(1)) * 2 + 1;
-  const idxB = eqB.startsWith('V') ? parseInt(eqB.substring(1)) * 2 : parseInt(eqB.substring(1)) * 2 + 1;
+  const idxA = ga.startsWith('V') ? parseInt(ga.substring(1)) * 2 : parseInt(ga.substring(1)) * 2 + 1;
+  const idxB = gb.startsWith('V') ? parseInt(gb.substring(1)) * 2 : parseInt(gb.substring(1)) * 2 + 1;
   
   const d = Math.min(Math.abs(idxA - idxB), 2 * n - Math.abs(idxA - idxB));
   
@@ -46,38 +22,13 @@ const getGovScore = (ga, gb, n, polygon) => {
 
 export class MedialAxisTransform {
   constructor(polygonVertices, options = {}) {
-    this.polygon = makeCCW(polygonVertices.map(v => {
-      const vec = new Vector2D(v.x, v.y);
-      if (v.isBridge) vec.isBridge = true;
-      return vec;
-    }));
-    this.epsilon = options.epsilon || 1e-5;
+    this.polygon = makeCCW(polygonVertices.map(v => new Vector2D(v.x, v.y)));
+    this.epsilon = options.epsilon !== undefined ? options.epsilon : 1e-5;
     this.tangentEpsilon = options.tangentEpsilon || 1e-4;
   }
 
-  distanceToPolygonExcludingBridges(point) {
-    let minDist = Infinity;
-    let closestPt = null;
-    let closestEdgeIdx = -1;
-
-    for (let i = 0; i < this.polygon.length; i++) {
-      const v1 = this.polygon[i];
-      const v2 = this.polygon[(i + 1) % this.polygon.length];
-      if (v1.isBridge && v2.isBridge) continue; // Skip bridge edges
-      
-      const pt = closestPointOnSegment(point, v1, v2);
-      const dist = point.dist(pt);
-      if (dist < minDist) {
-        minDist = dist;
-        closestPt = pt;
-        closestEdgeIdx = i;
-      }
-    }
-    return { distance: minDist, point: closestPt, edgeIndex: closestEdgeIdx };
-  }
-
   containsBall(center, radius) {
-    const { distance } = this.distanceToPolygonExcludingBridges(center);
+    const { distance } = distanceToPolygon(center, this.polygon);
     return distance >= radius - this.epsilon;
   }
 
@@ -101,7 +52,7 @@ export class MedialAxisTransform {
     return midPoint;
   }
 
-  // Structured Medial Axis with Junction Isolation and Bridge seam ignoring
+  // Structured Medial Axis with Junction Isolation
   computeStructuredSkeleton(samplesPerEdge) {
     const regularPoints = [];
     const junctionPoints = [];
@@ -120,25 +71,15 @@ export class MedialAxisTransform {
     // 1. Ray generation
     let totalLength = 0;
     for (let i = 0; i < N; i++) {
-      const next = (i + 1) % N;
-      if (!(this.polygon[i].isBridge && this.polygon[next].isBridge)) {
-        totalLength += this.polygon[i].dist(this.polygon[next]);
-      }
+      totalLength += this.polygon[i].dist(this.polygon[(i + 1) % N]);
     }
 
-    const numEdges = this.polygon.filter((p, idx) => {
-      const next = this.polygon[(idx + 1) % N];
-      return !(p.isBridge && next.isBridge);
-    }).length;
-    const numSamples = samplesPerEdge * numEdges;
-
+    const numSamples = samplesPerEdge * N;
     const rawMedialPoints = [];
 
     for (let i = 0; i < N; i++) {
       const p1 = this.polygon[i];
       const p2 = this.polygon[(i + 1) % N];
-      if (p1.isBridge && p2.isBridge) continue; // Skip bridge edges
-
       const len = p1.dist(p2);
       if (len === 0) continue;
       const normal = getInwardNormal(p1, p2);
@@ -152,11 +93,7 @@ export class MedialAxisTransform {
         let intersectionPoint = null;
         let minT = Infinity;
         for (let j = 0; j < N; j++) {
-          const c = this.polygon[j];
-          const d = this.polygon[(j + 1) % N];
-          if (c.isBridge && d.isBridge) continue; // Skip bridge edges
-          
-          const hit = intersectRaySegment(rayOrigin, normal, c, d);
+          const hit = intersectRaySegment(rayOrigin, normal, this.polygon[j], this.polygon[(j + 1) % N]);
           if (hit && hit.s < minT) {
             minT = hit.s;
             intersectionPoint = hit.point;
@@ -176,8 +113,6 @@ export class MedialAxisTransform {
       for (let j = 0; j < N; j++) {
         const a = this.polygon[j];
         const b = this.polygon[(j + 1) % N];
-        if (a.isBridge && b.isBridge) continue; // Skip bridge edges
-
         const cp = closestPointOnSegment(mp, a, b);
         const d = mp.dist(cp);
         
@@ -228,9 +163,9 @@ export class MedialAxisTransform {
 
     regularPoints.push(...filteredMedialPoints);
 
-    // 4. Setup explicitly preserved EndPoints (sharp convex corners, excluding bridge vertices)
+    // 4. Setup explicitly preserved EndPoints (sharp convex corners)
     for (let i = 0; i < N; i++) {
-      if (vertexTypes[i] === 'CONVEX' && !this.polygon[i].isBridge) {
+      if (vertexTypes[i] === 'CONVEX') {
         const prevIdx = (i - 1 + N) % N;
         const nextIdx = (i + 1) % N;
         const pPrev = this.polygon[prevIdx];
@@ -259,7 +194,7 @@ export class MedialAxisTransform {
       for (const n of internalNodes) {
         let score = 0;
         mp.governors.forEach(ga => n.governors.forEach(gb => {
-          score += getGovScore(ga, gb, N, this.polygon);
+          score += getGovScore(ga, gb, N);
         }));
         
         if (score >= 1.0 && mp.dist(n) < 25) {
@@ -307,7 +242,7 @@ export class MedialAxisTransform {
         
         let score = 0;
         mp.governors.forEach(ga => n.governors.forEach(gb => {
-          score += getGovScore(ga, gb, this.polygon.length, this.polygon);
+          score += getGovScore(ga, gb, this.polygon.length);
         }));
         
         if (score >= 1.0 && mp.dist(n) < 25) {
@@ -338,7 +273,7 @@ export class MedialAxisTransform {
       for (let j = i + 1; j < nodes.length; j++) {
         let score = 0;
         nodes[i].governors.forEach(ga => nodes[j].governors.forEach(gb => {
-          score += getGovScore(ga, gb, this.polygon.length, this.polygon);
+          score += getGovScore(ga, gb, this.polygon.length);
         }));
         if (score >= 1.0) {
           validPairs.push({ i, j, distSq: nodes[i].distSq(nodes[j]) });
@@ -356,10 +291,10 @@ export class MedialAxisTransform {
           
           let scoreK_i = 0, scoreK_j = 0;
           nodes[k].governors.forEach(ga => nodes[pair.i].governors.forEach(gb => {
-            scoreK_i += getGovScore(ga, gb, this.polygon.length, this.polygon);
+            scoreK_i += getGovScore(ga, gb, this.polygon.length);
           }));
           nodes[k].governors.forEach(ga => nodes[pair.j].governors.forEach(gb => {
-            scoreK_j += getGovScore(ga, gb, this.polygon.length, this.polygon);
+            scoreK_j += getGovScore(ga, gb, this.polygon.length);
           }));
           
           if (scoreK_i >= 1.0 && scoreK_j >= 1.0) {
@@ -420,7 +355,7 @@ export class MedialAxisTransform {
       }
     }
 
-    // 4. Robustness Fallback / Bridge Loop Connection: Connect disjoint components using visible node-pairs
+    // 4. Robustness Fallback: Connect disjoint components using visible node-pairs
     const isSegmentVisible = (a, b) => {
       const shrink = 1e-3;
       const dx = b.x - a.x;
@@ -431,7 +366,6 @@ export class MedialAxisTransform {
       for (let i = 0; i < this.polygon.length; i++) {
         const c = this.polygon[i];
         const d = this.polygon[(i + 1) % this.polygon.length];
-        if (c.isBridge && d.isBridge) continue; // Skip bridge edges
         
         const ccw = (p, q, r) => (r.y - p.y) * (q.x - p.x) > (q.y - p.y) * (r.x - p.x);
         const intersect = (ccw(aPrime, c, d) !== ccw(bPrime, c, d)) && (ccw(aPrime, bPrime, c) !== ccw(aPrime, bPrime, d));
