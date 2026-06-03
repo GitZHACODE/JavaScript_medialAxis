@@ -238,7 +238,15 @@ export class RhinoManager {
             });
         }
         
-        // 5. Post to Web Worker and trigger download on resolve
+        // 5. Gather structural bays/cells (if computed)
+        const bays = [];
+        if (this.appContext.state.structuralBays) {
+            this.appContext.state.structuralBays.forEach(cell => {
+                bays.push(cell.map(v => [v.x, v.y, 0.0]));
+            });
+        }
+        
+        // 6. Post to Web Worker and trigger download on resolve
         return new Promise((resolve, reject) => {
             this.exportResolve = (bytes) => {
                 try {
@@ -273,7 +281,8 @@ export class RhinoManager {
                 boundary,
                 skeleton,
                 ribs,
-                circles
+                circles,
+                bays
             });
         });
     }

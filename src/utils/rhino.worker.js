@@ -239,7 +239,31 @@ self.onmessage = async function(e) {
                 attr.delete();
             }
             
-            // 6. Serialize and return bytes
+            // 6. Add Structural Bays (Cells)
+            if (e.data.bays && e.data.bays.length > 0) {
+                const layerBays = new rhino.Layer();
+                layerBays.name = "Structural_Bays";
+                layerBays.color = { r: 59, g: 130, b: 246, a: 255 }; // Slate Blue
+                doc.layers().add(layerBays);
+                const baysLayerIdx = doc.layers().count - 1;
+                layerBays.delete();
+
+                const attr = new rhino.ObjectAttributes();
+                attr.layerIndex = baysLayerIdx;
+                
+                e.data.bays.forEach((bay, idx) => {
+                    attr.name = `Structural_Bay_${idx}`;
+                    const pl = new rhino.Polyline(bay.length + 1);
+                    bay.forEach(pt => pl.add(pt[0], pt[1], pt[2] || 0.0));
+                    pl.add(bay[0][0], bay[0][1], bay[0][2] || 0.0); // Close polyline
+                    
+                    doc.objects().addPolyline(pl, attr);
+                    pl.delete();
+                });
+                attr.delete();
+            }
+            
+            // 7. Serialize and return bytes
             const bytes = doc.toByteArray();
             doc.delete();
             

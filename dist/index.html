@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Interactive 2D Medial Axis Transform (MAT) Visualizer</title>
   <meta name="description" content="An interactive real-time visualizer for the fast sampling-based 2D Medial Axis Transform algorithm. Draw custom polygons and inspect skeleton branches, junction points, and maximal inscribed circles.">
-  <script type="module" crossorigin src="/assets/index-YPn6MLsZ.js"></script>
+  <script type="module" crossorigin src="/assets/index-H32ht_4r.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-D264T-5c.css">
 </head>
 <body>
@@ -196,9 +196,17 @@
             </div>
             <input type="range" id="slider-ribs" min="1" max="25" step="0.5" value="5">
           </div>
-
-
-
+          <!-- Show Structural Bays -->
+          <div class="toggle-container" id="toggle-bays-container">
+            <div class="toggle-details">
+              <span class="toggle-label">Show Structural Bays</span>
+              <span class="toggle-sub">Draws enclosed cells as structural spaces</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="chk-show-bays">
+              <span class="slider-switch"></span>
+            </label>
+          </div>
           <!-- Show Inscribed Circle on Hover -->
           <div class="toggle-container" id="toggle-hover-circle-container">
             <div class="toggle-details">

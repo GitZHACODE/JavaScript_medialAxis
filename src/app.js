@@ -4,6 +4,7 @@ import { MedialAxisTransform } from './medialAxis.js';
 import { Vector2D } from './utils/vector2d.js';
 import { distanceToPolygon, closestPointOnSegment } from './utils/geometry.js';
 import { RhinoManager } from './utils/RhinoManager.js';
+import { PlanarGraph } from './utils/planarGraph.js';
 
 // Application State
 const state = {
@@ -17,6 +18,8 @@ const state = {
   pruneBranches: false,
   showRibs: false,
   ribSpacing: 5.0, // Default in meters
+  showBays: false,
+  structuralBays: [],
   hoverCircle: true,
   showGovernors: true,
   isDrawing: false,
@@ -444,6 +447,55 @@ function recomputeMAT() {
   skeleton.simplifiedNodes = nodes;
 
   state.skeletonData = skeleton;
+
+  // Build Planar Graph to extract structural bays/enclosed cells
+  if (state.polygon.length >= 3) {
+    const graph = new PlanarGraph(1e-3);
+    
+    // A. Add boundary edges
+    for (let i = 0; i < state.polygon.length; i++) {
+      graph.addEdge(state.polygon[i], state.polygon[(i + 1) % state.polygon.length]);
+    }
+    
+    // B. Add skeleton segments
+    if (state.showSkeleton) {
+      if (state.simplifySkeleton) {
+        const segmentsToUse = state.pruneBranches
+          ? skeleton.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
+          : skeleton.simplifiedSegments;
+        for (const seg of segmentsToUse) {
+          graph.addEdge(seg.start, seg.end);
+        }
+      } else {
+        const samples = state.samplesPerEdge;
+        const pts = skeleton.regularPoints;
+        for (let i = 0; i < state.polygon.length; i++) {
+          for (let j = 0; j < samples - 1; j++) {
+            const idx1 = i * samples + j;
+            const idx2 = i * samples + (j + 1);
+            if (pts[idx1] && pts[idx2]) {
+              graph.addEdge(pts[idx1], pts[idx2]);
+            }
+          }
+        }
+      }
+    }
+    
+    // C. Add accepted ribs (when showRibs is ON and we have simplified segments)
+    if (state.showSkeleton && state.showRibs && state.simplifySkeleton) {
+      const acceptedRibs = computeAcceptedRibs();
+      for (const rib of acceptedRibs) {
+        graph.addEdge(rib.source, rib.target);
+      }
+    }
+    
+    // D. Extract faces
+    state.structuralBays = graph.extractFaces();
+    console.log(`[PlanarGraph] Extracted ${state.structuralBays.length} structural bays/cells.`);
+  } else {
+    state.structuralBays = [];
+  }
+
   state.computeTime = performance.now() - start;
 
   // Sync visibility of merge distance and ribs sliders
@@ -492,6 +544,172 @@ const crossesPolygonBoundary = (p1, p2, polygon) => {
   }
   return false;
 };
+
+function computeAcceptedRibs() {
+  if (!state.showRibs || state.polygon.length < 3 || !state.skeletonData || !state.skeletonData.simplifiedSegments) {
+    return [];
+  }
+
+  const segmentsToDivide = state.pruneBranches
+    ? state.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
+    : state.skeletonData.simplifiedSegments;
+
+  const candidateRibs = [];
+
+  // 1. Draw segment division ribs
+  for (const seg of segmentsToDivide) {
+    const startPt = seg.start;
+    const endPt = seg.end;
+    const vec = endPt.sub(startPt);
+    const len = vec.length();
+    const N = Math.max(1, Math.round(len / state.ribSpacing));
+
+    for (let k = 1; k < N; k++) {
+      const t = k / N;
+      const D_k = startPt.add(vec.scale(t));
+
+      const candidates = [];
+      for (let i = 0; i < state.polygon.length; i++) {
+        const v1 = state.polygon[i];
+        const v2 = state.polygon[(i + 1) % state.polygon.length];
+        const cp = closestPointOnSegment(D_k, v1, v2);
+        const dist = D_k.dist(cp);
+        candidates.push({
+          point: cp,
+          dist: dist,
+          vector: cp.sub(D_k).normalize()
+        });
+      }
+      candidates.sort((a, b) => a.dist - b.dist);
+
+      const closest1 = candidates[0];
+      let closest2 = null;
+      for (let i = 1; i < candidates.length; i++) {
+        const cand = candidates[i];
+        if (closest1.vector.dot(cand.vector) < 0.5) {
+          closest2 = cand;
+          break;
+        }
+      }
+
+      candidateRibs.push({
+        source: D_k,
+        target: closest1.point,
+        priority: 1
+      });
+      if (closest2) {
+        candidateRibs.push({
+          source: D_k,
+          target: closest2.point,
+          priority: 2
+        });
+      }
+    }
+  }
+
+  // 2. Draw active junction nodes 3-directional ribs
+  const activeInternalNodes = new Set();
+  for (const seg of segmentsToDivide) {
+    if (!seg.start.isEndPoint) activeInternalNodes.add(seg.start);
+    if (!seg.end.isEndPoint) activeInternalNodes.add(seg.end);
+  }
+
+  for (const node of activeInternalNodes) {
+    const candidates = [];
+    for (let i = 0; i < state.polygon.length; i++) {
+      const v1 = state.polygon[i];
+      const v2 = state.polygon[(i + 1) % state.polygon.length];
+      const cp = closestPointOnSegment(node, v1, v2);
+      const dist = node.dist(cp);
+      candidates.push({
+        point: cp,
+        dist: dist,
+        vector: cp.sub(node).normalize()
+      });
+    }
+    candidates.sort((a, b) => a.dist - b.dist);
+
+    const closest1 = candidates[0];
+    let closest2 = null;
+    let closest3 = null;
+
+    for (let i = 1; i < candidates.length; i++) {
+      const cand = candidates[i];
+      if (closest1.vector.dot(cand.vector) < 0.5) {
+        closest2 = cand;
+        break;
+      }
+    }
+
+    if (closest2) {
+      for (let i = 1; i < candidates.length; i++) {
+        const cand = candidates[i];
+        if (cand === closest2) continue;
+        if (closest1.vector.dot(cand.vector) < 0.5 && closest2.vector.dot(cand.vector) < 0.5) {
+          closest3 = cand;
+          break;
+        }
+      }
+    }
+
+    candidateRibs.push({
+      source: node,
+      target: closest1.point,
+      priority: 1
+    });
+    if (closest2) {
+      candidateRibs.push({
+        source: node,
+        target: closest2.point,
+        priority: 2
+      });
+    }
+    if (closest3) {
+      candidateRibs.push({
+        source: node,
+        target: closest3.point,
+        priority: 3
+      });
+    }
+  }
+
+  const sortedCandidates = candidateRibs.map(r => ({
+    ...r,
+    length: r.source.dist(r.target)
+  })).sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    return a.length - b.length;
+  });
+
+  const ribsCross = (r1, r2) => {
+    if (r1.source.dist(r2.source) < 1e-3 || r1.target.dist(r2.target) < 1e-3 ||
+        r1.source.dist(r2.target) < 1e-3 || r1.target.dist(r2.source) < 1e-3) {
+      return false;
+    }
+    const ccw = (a, b, c) => (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x);
+    return (ccw(r1.source, r2.source, r2.target) !== ccw(r1.target, r2.source, r2.target)) && 
+           (ccw(r1.source, r1.target, r2.source) !== ccw(r1.source, r1.target, r2.target));
+  };
+
+  const acceptedRibs = [];
+  for (const candidate of sortedCandidates) {
+    if (crossesPolygonBoundary(candidate.source, candidate.target, state.polygon)) {
+      continue;
+    }
+    let crossesAccepted = false;
+    for (const accepted of acceptedRibs) {
+      if (ribsCross(candidate, accepted)) {
+        crossesAccepted = true;
+        break;
+      }
+    }
+    if (!crossesAccepted) {
+      acceptedRibs.push(candidate);
+    }
+  }
+
+  return acceptedRibs;
+}
 
 // 3D Scene Geometry Builder (Clears and populates meshesGroup)
 function draw() {
@@ -692,9 +910,8 @@ function draw() {
 
     // Render Structural Ribs dropping columns to boundary
     if (state.showRibs) {
-      const segmentsToDivide = state.pruneBranches
-        ? state.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
-        : state.skeletonData.simplifiedSegments;
+      const acceptedRibs = computeAcceptedRibs();
+      appContext.acceptedRibsCache = acceptedRibs; // Cache for 3DM export
 
       const beadGeom = new THREE.CircleGeometry(0.15, 16);
       const beadMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // White spine division discs
@@ -708,176 +925,14 @@ function draw() {
       const contactGeom = new THREE.CircleGeometry(0.2, 16);
       const contactMat = new THREE.MeshBasicMaterial({ color: 0x4b5563 });
 
-      const candidateRibs = [];
-
-      // Draw segment division ribs
-      for (const seg of segmentsToDivide) {
-        const startPt = seg.start;
-        const endPt = seg.end;
-        const vec = endPt.sub(startPt);
-        const len = vec.length();
-        const N = Math.max(1, Math.round(len / state.ribSpacing));
-
-        for (let k = 1; k < N; k++) {
-          const t = k / N;
-          const D_k = startPt.add(vec.scale(t));
-
-          // Sphere bead on spine
-          const bead = new THREE.Mesh(beadGeom, beadMat);
-          bead.position.set(D_k.x, D_k.y, 0.038);
-          meshesGroup.add(bead);
-
-          // Find boundary contacts
-          const candidates = [];
-          for (let i = 0; i < state.polygon.length; i++) {
-            const v1 = state.polygon[i];
-            const v2 = state.polygon[(i + 1) % state.polygon.length];
-            const cp = closestPointOnSegment(D_k, v1, v2);
-            const dist = D_k.dist(cp);
-            candidates.push({
-              point: cp,
-              dist: dist,
-              vector: cp.sub(D_k).normalize()
-            });
-          }
-          candidates.sort((a, b) => a.dist - b.dist);
-
-          const closest1 = candidates[0];
-          let closest2 = null;
-          for (let i = 1; i < candidates.length; i++) {
-            const cand = candidates[i];
-            if (closest1.vector.dot(cand.vector) < 0.5) {
-              closest2 = cand;
-              break;
-            }
-          }
-
-          candidateRibs.push({
-            source: D_k,
-            target: closest1.point,
-            priority: 1
-          });
-          if (closest2) {
-            candidateRibs.push({
-              source: D_k,
-              target: closest2.point,
-              priority: 2
-            });
-          }
-        }
-      }
-
-      // Draw active junction nodes 3-directional ribs
-      const activeInternalNodes = new Set();
-      for (const seg of segmentsToDivide) {
-        if (!seg.start.isEndPoint) activeInternalNodes.add(seg.start);
-        if (!seg.end.isEndPoint) activeInternalNodes.add(seg.end);
-      }
-
-      for (const node of activeInternalNodes) {
-        const candidates = [];
-        for (let i = 0; i < state.polygon.length; i++) {
-          const v1 = state.polygon[i];
-          const v2 = state.polygon[(i + 1) % state.polygon.length];
-          const cp = closestPointOnSegment(node, v1, v2);
-          const dist = node.dist(cp);
-          candidates.push({
-            point: cp,
-            dist: dist,
-            vector: cp.sub(node).normalize()
-          });
-        }
-        candidates.sort((a, b) => a.dist - b.dist);
-
-        const closest1 = candidates[0];
-        let closest2 = null;
-        let closest3 = null;
-
-        for (let i = 1; i < candidates.length; i++) {
-          const cand = candidates[i];
-          if (closest1.vector.dot(cand.vector) < 0.5) {
-            closest2 = cand;
-            break;
-          }
-        }
-
-        if (closest2) {
-          for (let i = 1; i < candidates.length; i++) {
-            const cand = candidates[i];
-            if (cand === closest2) continue;
-            if (closest1.vector.dot(cand.vector) < 0.5 && closest2.vector.dot(cand.vector) < 0.5) {
-              closest3 = cand;
-              break;
-            }
-          }
-        }
-
-        candidateRibs.push({
-          source: node,
-          target: closest1.point,
-          priority: 1
-        });
-        if (closest2) {
-          candidateRibs.push({
-            source: node,
-            target: closest2.point,
-            priority: 2
-          });
-        }
-        if (closest3) {
-          candidateRibs.push({
-            source: node,
-            target: closest3.point,
-            priority: 3
-          });
-        }
-      }
-
-      // Sort candidates: higher priority first, then shorter lengths
-      const sortedCandidates = candidateRibs.map(r => ({
-        ...r,
-        length: r.source.dist(r.target)
-      })).sort((a, b) => {
-        if (a.priority !== b.priority) return a.priority - b.priority;
-        return a.length - b.length;
-      });
-
-      // Helper to check intersection between two ribs
-      const ribsCross = (r1, r2) => {
-        // Skip if they share a source or target point (within small epsilon)
-        if (r1.source.dist(r2.source) < 1e-3 || r1.target.dist(r2.target) < 1e-3 ||
-            r1.source.dist(r2.target) < 1e-3 || r1.target.dist(r2.source) < 1e-3) {
-          return false;
-        }
-
-        const ccw = (a, b, c) => (c.y - a.y) * (b.x - a.x) > (b.y - a.y) * (c.x - a.x);
-        return (ccw(r1.source, r2.source, r2.target) !== ccw(r1.target, r2.source, r2.target)) && 
-               (ccw(r1.source, r1.target, r2.source) !== ccw(r1.source, r1.target, r2.target));
-      };
-
-      const acceptedRibs = [];
-      for (const candidate of sortedCandidates) {
-        // 1. Check if it crosses the polygon boundary
-        if (crossesPolygonBoundary(candidate.source, candidate.target, state.polygon)) {
-          continue;
-        }
-
-        // 2. Check if it crosses any already accepted rib
-        let crossesAccepted = false;
-        for (const accepted of acceptedRibs) {
-          if (ribsCross(candidate, accepted)) {
-            crossesAccepted = true;
-            break;
-          }
-        }
-
-        if (!crossesAccepted) {
-          acceptedRibs.push(candidate);
-        }
+      // Draw spine beads
+      for (const rib of acceptedRibs) {
+        const bead = new THREE.Mesh(beadGeom, beadMat);
+        bead.position.set(rib.source.x, rib.source.y, 0.038);
+        meshesGroup.add(bead);
       }
 
       // Draw all accepted ribs
-      appContext.acceptedRibsCache = acceptedRibs; // Cache for 3DM export
       for (const rib of acceptedRibs) {
         const rPts = [
           new THREE.Vector3(rib.source.x, rib.source.y, 0.038),
@@ -959,6 +1014,50 @@ function draw() {
         }
       }
     }
+  }
+
+  // Render Enclosed Cells / Structural Bays
+  if (state.showBays && state.structuralBays && state.structuralBays.length > 0) {
+    state.structuralBays.forEach((cell, idx) => {
+      if (cell.length >= 3) {
+        // Create 2D Shape
+        const cellShape = new THREE.Shape();
+        cellShape.moveTo(cell[0].x, cell[0].y);
+        for (let k = 1; k < cell.length; k++) {
+          cellShape.lineTo(cell[k].x, cell[k].y);
+        }
+        cellShape.closePath();
+
+        // Muted pastel HSL colors
+        const hue = (idx * 137.5) % 360;
+        const bayGeom = new THREE.ShapeGeometry(cellShape);
+        const bayMat = new THREE.MeshBasicMaterial({
+          color: new THREE.Color(`hsl(${hue}, 45%, 60%)`),
+          transparent: true,
+          opacity: 0.15,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+        const bayMesh = new THREE.Mesh(bayGeom, bayMat);
+        bayMesh.position.z = 0.015; // Raised slightly above boundary grid
+        meshesGroup.add(bayMesh);
+
+        // Sub-divided boundary outlines for each cell (clean dark thin dashed lines)
+        const cellPts = cell.map(p => new THREE.Vector3(p.x, p.y, 0.018));
+        cellPts.push(cellPts[0]); // Close loop
+        const outlineGeom = new THREE.BufferGeometry().setFromPoints(cellPts);
+        const outlineMat = new THREE.LineDashedMaterial({
+          color: 0x4b5563, // Slate Grey
+          transparent: true,
+          opacity: 0.35,
+          dashSize: 0.2,
+          gapSize: 0.15
+        });
+        const outlineLine = new THREE.Line(outlineGeom, outlineMat);
+        outlineLine.computeLineDistances();
+        meshesGroup.add(outlineLine);
+      }
+    });
   }
 
   // 6. Interactive Polygon Vertices Drag Handles (Chrome Indigo Discs - Scaled down for meters)
@@ -1081,6 +1180,11 @@ function setupEventListeners() {
     recomputeMAT();
   });
 
+
+  document.getElementById('chk-show-bays').addEventListener('change', (e) => {
+    state.showBays = e.target.checked;
+    draw();
+  });
 
   document.getElementById('chk-hover-circle').addEventListener('change', (e) => {
     state.hoverCircle = e.target.checked;
