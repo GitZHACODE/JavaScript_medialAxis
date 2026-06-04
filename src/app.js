@@ -678,11 +678,14 @@ function recomputeMAT() {
       graph.addEdge(subdividedPolygon[i], subdividedPolygon[(i + 1) % subdividedPolygon.length], 'boundary');
     }
     
-    // B. Add skeleton segments
+    // B. Add skeleton segments (subdivided to include division points so all skeleton/rib vertices are movable)
     if (state.showSkeleton) {
       if (state.simplifySkeleton) {
         for (const seg of segmentsToUse) {
-          graph.addEdge(seg.start, seg.end, 'skeleton');
+          const pts = [seg.start, ...(seg.divisionPoints || []), seg.end];
+          for (let i = 0; i < pts.length - 1; i++) {
+            graph.addEdge(pts[i], pts[i + 1], 'skeleton');
+          }
         }
       } else {
         const samples = state.samplesPerEdge;
@@ -790,12 +793,16 @@ function computeAcceptedRibs() {
     const endPtOrig = new Vector2D(endPt.origX, endPt.origY);
     const vecOrig = endPtOrig.sub(startPtOrig);
 
+    seg.divisionPoints = [];
+
     for (let k = 1; k < N; k++) {
       const t = k / N;
       const D_k = startPt.add(vec.scale(t));
       const D_k_orig = startPtOrig.add(vecOrig.scale(t));
       D_k.origX = D_k_orig.x;
       D_k.origY = D_k_orig.y;
+
+      seg.divisionPoints.push(D_k);
 
       const candidates = [];
       for (let i = 0; i < state.polygon.length; i++) {
@@ -1396,17 +1403,11 @@ function draw() {
     });
 
     // B. Render draggable Graph Vertices
-    const vertexGeom = new THREE.CircleGeometry(0.5, 32); // 0.5m radius handle
-    const innerGeom = new THREE.CircleGeometry(0.18, 16);
+    const vertexGeom = new THREE.CircleGeometry(0.7, 32); // 0.7m radius handle
+    const innerGeom = new THREE.CircleGeometry(0.25, 16);
     const innerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
     state.planarGraph.vertices.forEach((v, i) => {
-      // Restrict to exterior polygon boundary vertices only
-      const distData = distanceToPolygon(v, state.polygon);
-      if (distData.distance > 0.05) {
-        return; // Skip rendering drag handles for interior vertices
-      }
-
       const vertexMat = new THREE.MeshBasicMaterial({
         color: 0x4f46e5, // Elegant indigo matching edges
         transparent: true,
@@ -1819,16 +1820,12 @@ function handleMouseDown(e) {
       let clickedGraphObject = false;
       for (const hit of intersects) {
         if (hit.object.userData && hit.object.userData.isGraphVertex) {
-          const vIdx = hit.object.userData.index;
-          const v = state.planarGraph.vertices[vIdx];
-          if (v && distanceToPolygon(v, state.polygon).distance < 0.05) {
-            state.draggedGraphVertexIdx = vIdx;
-            controls.enabled = false;
-            document.getElementById('status-dot').classList.add('loading');
-            document.getElementById('status-text').innerText = `Dragging graph vertex ${state.draggedGraphVertexIdx}...`;
-            clickedGraphObject = true;
-            break;
-          }
+          state.draggedGraphVertexIdx = hit.object.userData.index;
+          controls.enabled = false;
+          document.getElementById('status-dot').classList.add('loading');
+          document.getElementById('status-text').innerText = `Dragging graph vertex ${state.draggedGraphVertexIdx}...`;
+          clickedGraphObject = true;
+          break;
         }
       }
       
