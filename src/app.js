@@ -1061,6 +1061,7 @@ function draw() {
         linewidth: 1.5
       });
       const previewLine = new THREE.Line(previewGeom, previewMat);
+      previewLine.raycast = function() {};
       meshesGroup.add(previewLine);
     }
 
@@ -1080,6 +1081,7 @@ function draw() {
       });
       const customSphMesh = new THREE.Mesh(customSphGeom, customSphMat);
       customSphMesh.position.set(v.x, v.y, 0.03);
+      customSphMesh.raycast = function() {};
       meshesGroup.add(customSphMesh);
     }
   }
@@ -1106,6 +1108,7 @@ function draw() {
         ];
         const geom = new THREE.BufferGeometry().setFromPoints(linePts);
         const line = new THREE.Line(geom, simplifiedLineMat);
+        line.raycast = function() {};
         meshesGroup.add(line);
       }
     } else {
@@ -1129,6 +1132,7 @@ function draw() {
         if (pointsVec3.length >= 2) {
           const curveGeom = new THREE.BufferGeometry().setFromPoints(pointsVec3);
           const line = new THREE.Line(curveGeom, curveMat);
+          line.raycast = function() {};
           meshesGroup.add(line);
         }
       }
@@ -1139,6 +1143,7 @@ function draw() {
       for (const p of pts) {
         const bead = new THREE.Mesh(regularBeadGeom, regularBeadMat);
         bead.position.set(p.x, p.y, 0.03);
+        bead.raycast = function() {};
         meshesGroup.add(bead);
       }
     }
@@ -1160,6 +1165,7 @@ function draw() {
       });
       const nodeMesh = new THREE.Mesh(nodeGeom, nodeMat);
       nodeMesh.position.set(jp.x, jp.y, 0.035);
+      nodeMesh.raycast = function() {};
       meshesGroup.add(nodeMesh);
 
       // Concentric flat dashed (dotted) circle helper around nodes
@@ -1180,6 +1186,7 @@ function draw() {
       });
       const ringLine = new THREE.Line(ringGeom, ringMat);
       ringLine.computeLineDistances();
+      ringLine.raycast = function() {};
       meshesGroup.add(ringLine);
     }
 
@@ -1204,6 +1211,7 @@ function draw() {
       for (const rib of acceptedRibs) {
         const bead = new THREE.Mesh(beadGeom, beadMat);
         bead.position.set(rib.source.x, rib.source.y, 0.038);
+        bead.raycast = function() {};
         meshesGroup.add(bead);
       }
 
@@ -1215,10 +1223,12 @@ function draw() {
         ];
         const rGeom = new THREE.BufferGeometry().setFromPoints(rPts);
         const rLine = new THREE.Line(rGeom, ribMat);
+        rLine.raycast = function() {};
         meshesGroup.add(rLine);
 
         const contactMesh = new THREE.Mesh(contactGeom, contactMat);
         contactMesh.position.set(rib.target.x, rib.target.y, 0.038);
+        contactMesh.raycast = function() {};
         meshesGroup.add(contactMesh);
       }
     }
