@@ -46,8 +46,9 @@ export class PlanarGraph {
     const overridePt = this.getOverride(origPt);
     const targetPt = overridePt || pt;
 
+    const tol = Math.max(this.vertexTolerance, 0.02);
     for (let i = 0; i < this.vertices.length; i++) {
-      if (this.vertices[i].dist(targetPt) < this.vertexTolerance) {
+      if (this.vertices[i].dist(targetPt) < tol) {
         return i;
       }
     }

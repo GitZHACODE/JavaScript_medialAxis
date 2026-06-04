@@ -529,7 +529,7 @@ function filterPlanarGraphByActiveBays(graph, activeBays) {
     
     const ptU = graph.vertices[u];
     const ptV = graph.vertices[v];
-    if (isEdgeInAnyActiveBay(ptU, ptV, activeBays, graph.vertexTolerance)) {
+    if (isEdgeInAnyActiveBay(ptU, ptV, activeBays, 0.02)) {
       filteredEdges.push(edge);
     }
   }
@@ -622,18 +622,65 @@ function recomputeMAT() {
   if (state.polygon.length >= 3) {
     const graph = new PlanarGraph(1e-3, state.graphVertexOverrides);
     state.planarGraph = graph;
-    
-    // A. Add boundary edges
+
+    // Get accepted ribs first
+    const acceptedRibs = (state.showSkeleton && state.showRibs && state.simplifySkeleton)
+      ? computeAcceptedRibs()
+      : [];
+
+    // Pre-split the boundary polygon to include rib targets and skeleton endpoints lying on the boundary
+    const subdividedPolygon = [];
+    const pointsOnBoundary = [];
+
+    for (const rib of acceptedRibs) {
+      pointsOnBoundary.push(rib.target);
+    }
+
+    const segmentsToUse = state.pruneBranches
+      ? skeleton.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
+      : skeleton.simplifiedSegments;
+
+    for (const node of skeleton.simplifiedNodes) {
+      if (node.isEndPoint) {
+        pointsOnBoundary.push(node);
+      }
+    }
+
     for (let i = 0; i < state.polygon.length; i++) {
-      graph.addEdge(state.polygon[i], state.polygon[(i + 1) % state.polygon.length], 'boundary');
+      const v1 = state.polygon[i];
+      const v2 = state.polygon[(i + 1) % state.polygon.length];
+      
+      subdividedPolygon.push(v1);
+      
+      const targetsOnSegment = [];
+      for (const pt of pointsOnBoundary) {
+        const cp = closestPointOnSegment(pt, v1, v2);
+        if (pt.dist(cp) < 1e-3) {
+          const len = v2.sub(v1).length();
+          const d1 = v1.dist(cp);
+          const d2 = v2.dist(cp);
+          if (d1 > 1e-3 && d2 > 1e-3 && (d1 + d2) < len + 1e-3) {
+            if (!targetsOnSegment.some(t => t.point.dist(pt) < 1e-3)) {
+              targetsOnSegment.push({ point: pt, dist: d1 });
+            }
+          }
+        }
+      }
+      
+      targetsOnSegment.sort((a, b) => a.dist - b.dist);
+      for (const item of targetsOnSegment) {
+        subdividedPolygon.push(item.point);
+      }
+    }
+
+    // A. Add boundary edges (subdivided to avoid duplicated / coincident vertices and allow bending)
+    for (let i = 0; i < subdividedPolygon.length; i++) {
+      graph.addEdge(subdividedPolygon[i], subdividedPolygon[(i + 1) % subdividedPolygon.length], 'boundary');
     }
     
     // B. Add skeleton segments
     if (state.showSkeleton) {
       if (state.simplifySkeleton) {
-        const segmentsToUse = state.pruneBranches
-          ? skeleton.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
-          : skeleton.simplifiedSegments;
         for (const seg of segmentsToUse) {
           graph.addEdge(seg.start, seg.end, 'skeleton');
         }
@@ -652,13 +699,10 @@ function recomputeMAT() {
       }
     }
     
-    // C. Add accepted ribs (when showRibs is ON and we have simplified segments)
-    if (state.showSkeleton && state.showRibs && state.simplifySkeleton) {
-      const acceptedRibs = computeAcceptedRibs();
-      for (let idx = 0; idx < acceptedRibs.length; idx++) {
-        const rib = acceptedRibs[idx];
-        graph.addEdge(rib.source, rib.target, `rib_${idx}`);
-      }
+    // C. Add accepted ribs
+    for (let idx = 0; idx < acceptedRibs.length; idx++) {
+      const rib = acceptedRibs[idx];
+      graph.addEdge(rib.source, rib.target, `rib_${idx}`);
     }
     
     // D. Extract faces and apply edits
@@ -757,9 +801,16 @@ function computeAcceptedRibs() {
       for (let i = 0; i < state.polygon.length; i++) {
         const v1 = state.polygon[i];
         const v2 = state.polygon[(i + 1) % state.polygon.length];
-        const cp = closestPointOnSegment(D_k, v1, v2);
+        
+        let cp = closestPointOnSegment(D_k, v1, v2);
+        if (cp.dist(v1) < 0.05) cp = v1;
+        else if (cp.dist(v2) < 0.05) cp = v2;
+
+        let cpOrig = closestPointOnSegment(D_k_orig, v1, v2);
+        if (cpOrig.dist(v1) < 0.05) cpOrig = v1;
+        else if (cpOrig.dist(v2) < 0.05) cpOrig = v2;
+
         const dist = D_k.dist(cp);
-        const cpOrig = closestPointOnSegment(D_k_orig, v1, v2);
         candidates.push({
           point: cp,
           pointOrig: cpOrig,
@@ -815,9 +866,16 @@ function computeAcceptedRibs() {
     for (let i = 0; i < state.polygon.length; i++) {
       const v1 = state.polygon[i];
       const v2 = state.polygon[(i + 1) % state.polygon.length];
-      const cp = closestPointOnSegment(node, v1, v2);
+      
+      let cp = closestPointOnSegment(node, v1, v2);
+      if (cp.dist(v1) < 0.05) cp = v1;
+      else if (cp.dist(v2) < 0.05) cp = v2;
+
+      let cpOrig = closestPointOnSegment(nodeOrig, v1, v2);
+      if (cpOrig.dist(v1) < 0.05) cpOrig = v1;
+      else if (cpOrig.dist(v2) < 0.05) cpOrig = v2;
+
       const dist = node.dist(cp);
-      const cpOrig = closestPointOnSegment(nodeOrig, v1, v2);
       candidates.push({
         point: cp,
         pointOrig: cpOrig,
