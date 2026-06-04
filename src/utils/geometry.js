@@ -85,3 +85,109 @@ export function distanceToPolygon(point, polygon) {
   }
   return { distance: minDist, point: closestPt, edgeIndex: closestEdgeIdx };
 }
+
+// Ray-casting point-in-polygon check
+export function pointInPolygon(point, vs) {
+  let x = point.x, y = point.y;
+  let inside = false;
+  for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+    let xi = vs[i].x, yi = vs[i].y;
+    let xj = vs[j].x, yj = vs[j].y;
+    let intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// Merges multiple CCW polygons by removing shared edges and tracing the boundary.
+export function mergePolygonCells(cells) {
+  if (cells.length === 0) return null;
+  let merged = cells[0];
+  for (let i = 1; i < cells.length; i++) {
+    merged = mergeTwoPolygons(merged, cells[i]);
+    if (!merged) return null;
+  }
+  return cleanupCollinear(merged);
+}
+
+// Merges two adjacent CCW polygons.
+function mergeTwoPolygons(polyA, polyB) {
+  const edgesA = [];
+  for (let i = 0; i < polyA.length; i++) {
+    edgesA.push([polyA[i], polyA[(i + 1) % polyA.length]]);
+  }
+  const edgesB = [];
+  for (let i = 0; i < polyB.length; i++) {
+    edgesB.push([polyB[i], polyB[(i + 1) % polyB.length]]);
+  }
+
+  const getKey = (p) => `${p.x.toFixed(4)},${p.y.toFixed(4)}`;
+
+  const keysB = new Set();
+  for (const e of edgesB) {
+    keysB.add(`${getKey(e[0])}->${getKey(e[1])}`);
+  }
+
+  const filteredA = edgesA.filter(e => !keysB.has(`${getKey(e[1])}->${getKey(e[0])}`));
+  
+  const keysA = new Set();
+  for (const e of edgesA) {
+    keysA.add(`${getKey(e[0])}->${getKey(e[1])}`);
+  }
+  const filteredB = edgesB.filter(e => !keysA.has(`${getKey(e[1])}->${getKey(e[0])}`));
+
+  const remaining = [...filteredA, ...filteredB];
+  if (remaining.length === 0) return null;
+
+  const adj = new Map();
+  for (const e of remaining) {
+    adj.set(getKey(e[0]), { start: e[0], end: e[1] });
+  }
+
+  const startKey = Array.from(adj.keys())[0];
+  let currKey = startKey;
+  const mergedPoints = [];
+  const visited = new Set();
+
+  while (currKey && !visited.has(currKey)) {
+    visited.add(currKey);
+    const edge = adj.get(currKey);
+    if (!edge) break;
+    mergedPoints.push(edge.start);
+    currKey = getKey(edge.end);
+  }
+
+  // If we didn't visit all remaining edges, they are not a single connected loop
+  if (visited.size < remaining.length) {
+    return null;
+  }
+
+  return mergedPoints;
+}
+
+// Removes collinear vertices from a 2D polygon.
+export function cleanupCollinear(points) {
+  if (points.length < 3) return points;
+  const result = [];
+  for (let i = 0; i < points.length; i++) {
+    const prev = points[(i - 1 + points.length) % points.length];
+    const curr = points[i];
+    const next = points[(i + 1) % points.length];
+    
+    const dx1 = curr.x - prev.x;
+    const dy1 = curr.y - prev.y;
+    const dx2 = next.x - curr.x;
+    const dy2 = next.y - curr.y;
+    
+    const len1 = Math.hypot(dx1, dy1);
+    const len2 = Math.hypot(dx2, dy2);
+    if (len1 < 1e-6 || len2 < 1e-6) continue;
+    
+    const cross = (dx1 * dy2 - dy1 * dx2) / (len1 * len2);
+    
+    if (Math.abs(cross) > 1e-3) {
+      result.push(curr);
+    }
+  }
+  return result;
+}

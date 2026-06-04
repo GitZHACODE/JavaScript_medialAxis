@@ -206,6 +206,27 @@
               <span class="slider-switch"></span>
             </label>
           </div>
+          
+          <!-- Edit Bays Sub-panel (hidden by default) -->
+          <div id="container-edit-bays" style="display: none; margin-top: 10px; margin-bottom: 15px; border: 1px dashed var(--border-color); padding: 12px; background: rgba(0,0,0,0.02);">
+            <div class="toggle-container" style="border: none; padding: 0 0 10px 0; background: transparent; cursor: default;">
+              <div class="toggle-details">
+                <span class="toggle-label" style="font-size: 0.82rem; font-weight: 600;">Edit Bays Mode</span>
+                <span class="toggle-sub" style="font-size: 0.7rem;">Click cells in viewport to select them</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-edit-bays-mode">
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+            <div id="edit-bays-actions" style="display: none; grid-template-columns: 1fr; gap: 8px; margin-top: 8px;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <button class="btn" id="btn-combine-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center;" disabled>Combine</button>
+                <button class="btn" id="btn-delete-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; color: #ef4444; border-color: rgba(239, 68, 68, 0.2);" disabled>Delete</button>
+              </div>
+              <button class="btn" id="btn-reset-bay-edits" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; width: 100%;">Reset Edits</button>
+            </div>
+          </div>
           <!-- Show Inscribed Circle on Hover -->
           <div class="toggle-container" id="toggle-hover-circle-container">
             <div class="toggle-details">

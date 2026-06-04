@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { MedialAxisTransform } from './medialAxis.js';
 import { Vector2D } from './utils/vector2d.js';
-import { distanceToPolygon, closestPointOnSegment } from './utils/geometry.js';
+import { distanceToPolygon, closestPointOnSegment, pointInPolygon, mergePolygonCells } from './utils/geometry.js';
 import { RhinoManager } from './utils/RhinoManager.js';
 import { PlanarGraph } from './utils/planarGraph.js';
 
@@ -20,6 +20,9 @@ const state = {
   ribSpacing: 5.0, // Default in meters
   showBays: false,
   structuralBays: [],
+  editBaysMode: false,
+  selectedBayIndices: [],
+  bayEdits: [], // Array of { type: 'delete'|'merge', points: Vector2D[] }
   hoverCircle: true,
   showGovernors: true,
   isDrawing: false,
@@ -418,6 +421,79 @@ const presets = {
   }
 };
 
+// Computes centroid of a polygon
+export function getCentroid(pts) {
+  let sx = 0, sy = 0;
+  pts.forEach(p => { sx += p.x; sy += p.y; });
+  return new Vector2D(sx / pts.length, sy / pts.length);
+}
+
+// Find index of the cell matching a tracking point
+export function findMatchingBayIndex(bays, pt) {
+  // 1. Check point-in-polygon
+  for (let i = 0; i < bays.length; i++) {
+    if (pointInPolygon(pt, bays[i])) {
+      return i;
+    }
+  }
+  // 2. Fallback to closest centroid
+  let minDist = Infinity;
+  let bestIdx = -1;
+  for (let i = 0; i < bays.length; i++) {
+    const c = getCentroid(bays[i]);
+    const d = c.dist(pt);
+    if (d < minDist) {
+      minDist = d;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
+// Applies edits history to newly extracted raw bays
+export function applyBayEdits(rawBays, edits) {
+  let activeBays = rawBays.map(cell => cell.map(pt => new Vector2D(pt.x, pt.y)));
+  
+  for (const edit of edits) {
+    if (edit.type === 'delete') {
+      const idx = findMatchingBayIndex(activeBays, edit.point);
+      if (idx !== -1) {
+        activeBays.splice(idx, 1);
+      }
+    } else if (edit.type === 'merge') {
+      const matchIndices = [];
+      for (const pt of edit.points) {
+        const idx = findMatchingBayIndex(activeBays, pt);
+        if (idx !== -1 && !matchIndices.includes(idx)) {
+          matchIndices.push(idx);
+        }
+      }
+      
+      if (matchIndices.length >= 2) {
+        // Sort descending to splice safely
+        matchIndices.sort((a, b) => b - a);
+        const cellsToMerge = [];
+        for (const idx of matchIndices) {
+          cellsToMerge.push(activeBays[idx]);
+          activeBays.splice(idx, 1);
+        }
+        
+        const mergedCell = mergePolygonCells(cellsToMerge);
+        if (mergedCell) {
+          activeBays.push(mergedCell);
+        } else {
+          // If merge failed, put them back
+          for (const cell of cellsToMerge) {
+            activeBays.push(cell);
+          }
+        }
+      }
+    }
+  }
+  
+  return activeBays;
+}
+
 // Compute the Medial Axis Transform using core library class
 function recomputeMAT() {
   if (state.polygon.length < 3) {
@@ -490,9 +566,10 @@ function recomputeMAT() {
       }
     }
     
-    // D. Extract faces
-    state.structuralBays = graph.extractFaces();
-    console.log(`[PlanarGraph] Extracted ${state.structuralBays.length} structural bays/cells.`);
+    // D. Extract faces and apply edits
+    const rawBays = graph.extractFaces();
+    state.structuralBays = applyBayEdits(rawBays, state.bayEdits);
+    console.log(`[PlanarGraph] Extracted raw ${rawBays.length} bays, applied edits to get ${state.structuralBays.length} bays.`);
   } else {
     state.structuralBays = [];
   }
@@ -1029,13 +1106,19 @@ function draw() {
         }
         cellShape.closePath();
 
-        // Muted pastel HSL colors
-        const hue = (idx * 137.5) % 360;
+        const isSelected = state.selectedBayIndices.includes(idx);
+        
+        // Muted pastel HSL colors, or highlight orange if selected
+        const colorVal = isSelected 
+          ? new THREE.Color('hsl(25, 95%, 55%)')
+          : new THREE.Color(`hsl(${(idx * 137.5) % 360}, 45%, 60%)`);
+        const opacityVal = isSelected ? 0.45 : 0.15;
+
         const bayGeom = new THREE.ShapeGeometry(cellShape);
         const bayMat = new THREE.MeshBasicMaterial({
-          color: new THREE.Color(`hsl(${hue}, 45%, 60%)`),
+          color: colorVal,
           transparent: true,
-          opacity: 0.15,
+          opacity: opacityVal,
           side: THREE.DoubleSide,
           depthWrite: false
         });
@@ -1043,19 +1126,29 @@ function draw() {
         bayMesh.position.z = 0.015; // Raised slightly above boundary grid
         meshesGroup.add(bayMesh);
 
-        // Sub-divided boundary outlines for each cell (clean dark thin dashed lines)
+        // Sub-divided boundary outlines for each cell (clean dark thin dashed lines, or solid orange if selected)
         const cellPts = cell.map(p => new THREE.Vector3(p.x, p.y, 0.018));
         cellPts.push(cellPts[0]); // Close loop
         const outlineGeom = new THREE.BufferGeometry().setFromPoints(cellPts);
-        const outlineMat = new THREE.LineDashedMaterial({
-          color: 0x4b5563, // Slate Grey
-          transparent: true,
-          opacity: 0.35,
-          dashSize: 0.2,
-          gapSize: 0.15
-        });
-        const outlineLine = new THREE.Line(outlineGeom, outlineMat);
-        outlineLine.computeLineDistances();
+        
+        let outlineLine;
+        if (isSelected) {
+          const outlineMat = new THREE.LineBasicMaterial({
+            color: 0xe65100, // Rich Dark Orange
+            linewidth: 2.5
+          });
+          outlineLine = new THREE.Line(outlineGeom, outlineMat);
+        } else {
+          const outlineMat = new THREE.LineDashedMaterial({
+            color: 0x4b5563, // Slate Grey
+            transparent: true,
+            opacity: 0.35,
+            dashSize: 0.2,
+            gapSize: 0.15
+          });
+          outlineLine = new THREE.Line(outlineGeom, outlineMat);
+          outlineLine.computeLineDistances();
+        }
         meshesGroup.add(outlineLine);
       }
     });
@@ -1182,9 +1275,75 @@ function setupEventListeners() {
   });
 
 
+  function updateBaySelectionUI() {
+    const btnCombine = document.getElementById('btn-combine-bays');
+    const btnDelete = document.getElementById('btn-delete-bays');
+    if (btnCombine) {
+      btnCombine.disabled = state.selectedBayIndices.length < 2;
+    }
+    if (btnDelete) {
+      btnDelete.disabled = state.selectedBayIndices.length === 0;
+    }
+  }
+
   document.getElementById('chk-show-bays').addEventListener('change', (e) => {
     state.showBays = e.target.checked;
+    
+    const container = document.getElementById('container-edit-bays');
+    if (container) {
+      container.style.display = state.showBays ? 'block' : 'none';
+    }
+    
+    if (!state.showBays) {
+      state.editBaysMode = false;
+      state.selectedBayIndices = [];
+      const chkEdit = document.getElementById('chk-edit-bays-mode');
+      if (chkEdit) chkEdit.checked = false;
+      const actions = document.getElementById('edit-bays-actions');
+      if (actions) actions.style.display = 'none';
+    }
     draw();
+  });
+
+  document.getElementById('chk-edit-bays-mode').addEventListener('change', (e) => {
+    state.editBaysMode = e.target.checked;
+    state.selectedBayIndices = [];
+    
+    const actions = document.getElementById('edit-bays-actions');
+    if (actions) {
+      actions.style.display = state.editBaysMode ? 'grid' : 'none';
+    }
+    
+    updateBaySelectionUI();
+    draw();
+  });
+
+  document.getElementById('btn-combine-bays').addEventListener('click', () => {
+    if (state.selectedBayIndices.length >= 2) {
+      const points = state.selectedBayIndices.map(idx => getCentroid(state.structuralBays[idx]));
+      state.bayEdits.push({ type: 'merge', points });
+      state.selectedBayIndices = [];
+      updateBaySelectionUI();
+      recomputeMAT();
+    }
+  });
+
+  document.getElementById('btn-delete-bays').addEventListener('click', () => {
+    if (state.selectedBayIndices.length > 0) {
+      state.selectedBayIndices.forEach(idx => {
+        state.bayEdits.push({ type: 'delete', point: getCentroid(state.structuralBays[idx]) });
+      });
+      state.selectedBayIndices = [];
+      updateBaySelectionUI();
+      recomputeMAT();
+    }
+  });
+
+  document.getElementById('btn-reset-bay-edits').addEventListener('click', () => {
+    state.bayEdits = [];
+    state.selectedBayIndices = [];
+    updateBaySelectionUI();
+    recomputeMAT();
   });
 
   document.getElementById('chk-hover-circle').addEventListener('change', (e) => {
@@ -1397,6 +1556,28 @@ function handleMouseDown(e) {
   if (e.button === 1 || e.button === 2) return;
 
   if (e.button === 0) {
+    if (state.editBaysMode) {
+      const target = getIntersectionPoint(e);
+      const worldPos = new Vector2D(target.x, target.y);
+      const clickedIdx = state.structuralBays.findIndex(bay => pointInPolygon(worldPos, bay));
+      if (clickedIdx !== -1) {
+        const selIdx = state.selectedBayIndices.indexOf(clickedIdx);
+        if (selIdx !== -1) {
+          state.selectedBayIndices.splice(selIdx, 1);
+        } else {
+          state.selectedBayIndices.push(clickedIdx);
+        }
+        
+        const btnCombine = document.getElementById('btn-combine-bays');
+        const btnDelete = document.getElementById('btn-delete-bays');
+        if (btnCombine) btnCombine.disabled = state.selectedBayIndices.length < 2;
+        if (btnDelete) btnDelete.disabled = state.selectedBayIndices.length === 0;
+
+        draw();
+      }
+      return; // Prevent vertex dragging/drawing while editing bays
+    }
+
     const rect = canvas.getBoundingClientRect();
     mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
@@ -1455,7 +1636,7 @@ function handleMouseMove(e) {
     recomputeMAT();
   } else if (state.isDrawing) {
     draw();
-  } else if (state.hoverCircle && state.polygon.length >= 3 && controls.state === -1) {
+  } else if (state.hoverCircle && !state.editBaysMode && state.polygon.length >= 3 && controls.state === -1) {
     // Hover logic: Find closest medial point (measured in screen space distance)
     const rect = canvas.getBoundingClientRect();
     const screenMouse = new Vector2D(e.clientX - rect.left, e.clientY - rect.top);
