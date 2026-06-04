@@ -25,6 +25,7 @@ const state = {
   bayEdits: [], // Array of { type: 'delete'|'merge', points: Vector2D[] }
   graphVertexOverrides: new Map(),
   draggedGraphVertexIdx: -1,
+  draggedGraphVertexOrig: null,
   draggedGraphEdgeIdx: -1,
   dragStartMousePos: null,
   planarGraph: null,
@@ -305,6 +306,10 @@ function resizeCanvas() {
 // Loads a preset shape and triggers computation
 function loadPreset(name) {
   state.activePreset = name;
+  state.graphVertexOverrides.clear();
+  state.bayEdits = [];
+  state.selectedBayIndices = [];
+  
   const rect = wrapper.getBoundingClientRect();
   const w = Math.max(800, rect.width - 40);
   const h = Math.max(600, rect.height - 40);
@@ -574,6 +579,33 @@ function recomputeMAT() {
   }
 
   const start = performance.now();
+
+  // 1. Deform boundary polygon using overrides
+  for (const p of state.polygon) {
+    if (p.origX === undefined) {
+      p.origX = p.x;
+      p.origY = p.y;
+    }
+    // Reset to original position
+    p.x = p.origX;
+    p.y = p.origY;
+
+    let foundOverride = null;
+    for (const [keyStr, val] of state.graphVertexOverrides.entries()) {
+      const parts = keyStr.split(',');
+      const kx = parseFloat(parts[0]);
+      const ky = parseFloat(parts[1]);
+      const dist = Math.hypot(p.origX - kx, p.origY - ky);
+      if (dist < 0.1) {
+        foundOverride = val;
+        break;
+      }
+    }
+    if (foundOverride) {
+      p.x = foundOverride.x;
+      p.y = foundOverride.y;
+    }
+  }
   
   // Initialize MAT with user tolerances
   const mat = new MedialAxisTransform(state.polygon, {
@@ -591,7 +623,7 @@ function recomputeMAT() {
     state.mergeThreshold
   );
   
-  // Store original coordinates and match with graph overrides
+  // Store original coordinates and match with graph overrides for simplified nodes
   for (const node of nodes) {
     node.origX = node.x;
     node.origY = node.y;
@@ -610,6 +642,48 @@ function recomputeMAT() {
     if (foundOverride) {
       node.x = foundOverride.x;
       node.y = foundOverride.y;
+    }
+  }
+
+  // Precompute segment division points with matching overrides
+  for (const seg of segments) {
+    const startPt = seg.start;
+    const endPt = seg.end;
+    const vec = endPt.sub(startPt);
+    const len = vec.length();
+    const N = Math.max(1, Math.round(len / state.ribSpacing));
+
+    const startPtOrig = new Vector2D(startPt.origX, startPt.origY);
+    const endPtOrig = new Vector2D(endPt.origX, endPt.origY);
+    const vecOrig = endPtOrig.sub(startPtOrig);
+
+    seg.divisionPoints = [];
+
+    for (let k = 1; k < N; k++) {
+      const t = k / N;
+      const D_k = startPt.add(vec.scale(t));
+      const D_k_orig = startPtOrig.add(vecOrig.scale(t));
+      D_k.origX = D_k_orig.x;
+      D_k.origY = D_k_orig.y;
+
+      // Match with graphVertexOverrides
+      let foundOverride = null;
+      for (const [keyStr, val] of state.graphVertexOverrides.entries()) {
+        const parts = keyStr.split(',');
+        const kx = parseFloat(parts[0]);
+        const ky = parseFloat(parts[1]);
+        const dist = Math.hypot(D_k.origX - kx, D_k.origY - ky);
+        if (dist < 0.1) {
+          foundOverride = val;
+          break;
+        }
+      }
+      if (foundOverride) {
+        D_k.x = foundOverride.x;
+        D_k.y = foundOverride.y;
+      }
+
+      seg.divisionPoints.push(D_k);
     }
   }
 
@@ -782,27 +856,10 @@ function computeAcceptedRibs() {
 
   // 1. Draw segment division ribs
   for (const seg of segmentsToDivide) {
-    const startPt = seg.start;
-    const endPt = seg.end;
-    const vec = endPt.sub(startPt);
-    const len = vec.length();
-    const N = Math.max(1, Math.round(len / state.ribSpacing));
+    if (!seg.divisionPoints) continue;
 
-    // Original points and vector
-    const startPtOrig = new Vector2D(startPt.origX, startPt.origY);
-    const endPtOrig = new Vector2D(endPt.origX, endPt.origY);
-    const vecOrig = endPtOrig.sub(startPtOrig);
-
-    seg.divisionPoints = [];
-
-    for (let k = 1; k < N; k++) {
-      const t = k / N;
-      const D_k = startPt.add(vec.scale(t));
-      const D_k_orig = startPtOrig.add(vecOrig.scale(t));
-      D_k.origX = D_k_orig.x;
-      D_k.origY = D_k_orig.y;
-
-      seg.divisionPoints.push(D_k);
+    for (const D_k of seg.divisionPoints) {
+      const D_k_orig = new Vector2D(D_k.origX, D_k.origY);
 
       const candidates = [];
       for (let i = 0; i < state.polygon.length; i++) {
@@ -1624,6 +1681,9 @@ function setupEventListeners() {
     state.isDrawing = true;
     state.customVertices = [];
     state.polygon = [];
+    state.graphVertexOverrides.clear();
+    state.bayEdits = [];
+    state.selectedBayIndices = [];
     state.skeletonData = { regularPoints: [], junctionPoints: [] };
     
     btnDrawCustom.style.display = 'none';
@@ -1830,10 +1890,12 @@ function handleMouseDown(e) {
       let clickedGraphObject = false;
       for (const hit of intersects) {
         if (hit.object.userData && hit.object.userData.isGraphVertex) {
-          state.draggedGraphVertexIdx = hit.object.userData.index;
+          const idx = hit.object.userData.index;
+          state.draggedGraphVertexOrig = state.planarGraph.originalVertices[idx];
+          state.draggedGraphVertexIdx = idx;
           controls.enabled = false;
           document.getElementById('status-dot').classList.add('loading');
-          document.getElementById('status-text').innerText = `Dragging graph vertex ${state.draggedGraphVertexIdx}...`;
+          document.getElementById('status-text').innerText = `Dragging graph vertex...`;
           clickedGraphObject = true;
           break;
         }
@@ -1912,8 +1974,8 @@ function handleMouseMove(e) {
   const worldPos = new Vector2D(target.x, target.y);
   state.mouseWorldPos = worldPos;
 
-  if (state.draggedGraphVertexIdx !== -1 && state.planarGraph) {
-    const origPt = state.planarGraph.originalVertices[state.draggedGraphVertexIdx];
+  if (state.draggedGraphVertexOrig && state.planarGraph) {
+    const origPt = state.draggedGraphVertexOrig;
     state.graphVertexOverrides.set(`${origPt.x.toFixed(4)},${origPt.y.toFixed(4)}`, worldPos);
     recomputeMAT();
   } else if (state.draggedVertexIdx !== -1) {
@@ -1957,7 +2019,8 @@ function handleMouseMove(e) {
 }
 
 function handleMouseUp() {
-  if (state.draggedGraphVertexIdx !== -1) {
+  if (state.draggedGraphVertexOrig || state.draggedGraphVertexIdx !== -1) {
+    state.draggedGraphVertexOrig = null;
     state.draggedGraphVertexIdx = -1;
     controls.enabled = true;
     document.getElementById('status-dot').classList.remove('loading');
@@ -1973,7 +2036,8 @@ function handleMouseUp() {
 function handleMouseLeave() {
   state.mouseWorldPos = null;
   state.hoveredMedialPoint = null;
-  if (state.draggedGraphVertexIdx !== -1) {
+  if (state.draggedGraphVertexOrig || state.draggedGraphVertexIdx !== -1) {
+    state.draggedGraphVertexOrig = null;
     state.draggedGraphVertexIdx = -1;
     controls.enabled = true;
     document.getElementById('status-dot').classList.remove('loading');
