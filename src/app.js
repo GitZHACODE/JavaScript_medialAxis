@@ -1663,7 +1663,7 @@ function setupEventListeners() {
     }
   });
 
-  document.getElementById('btn-delete-bays').addEventListener('click', () => {
+  const deleteSelectedBays = () => {
     if (state.selectedBayIndices.length > 0) {
       state.selectedBayIndices.forEach(idx => {
         state.bayEdits.push({ type: 'delete', point: getCentroid(state.structuralBays[idx]) });
@@ -1671,6 +1671,17 @@ function setupEventListeners() {
       state.selectedBayIndices = [];
       updateBaySelectionUI();
       recomputeMAT();
+    }
+  };
+
+  document.getElementById('btn-delete-bays').addEventListener('click', deleteSelectedBays);
+
+  window.addEventListener('keydown', (e) => {
+    if (state.editBaysMode && (e.key === 'Delete' || e.key === 'Del')) {
+      if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA')) {
+        return;
+      }
+      deleteSelectedBays();
     }
   });
 
