@@ -271,14 +271,14 @@ canvas {
   background-color: rgba(0, 0, 0, 0.01);
   border: 1px solid var(--border-color);
   border-radius: 0;
-  padding: 10px;
+  padding: 8px 10px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s ease;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  min-height: 38px;
 }
 
 .preset-card:hover {
@@ -292,22 +292,6 @@ canvas {
   background: rgba(0, 0, 0, 0.06);
   border-color: var(--accent-color);
   box-shadow: 0 0 10px var(--accent-glow);
-}
-
-.preset-icon {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0;
-  background-color: rgba(0, 0, 0, 0.03);
-  color: var(--accent-color);
-}
-
-.preset-card.active .preset-icon {
-  background-color: var(--accent-color);
-  color: #fff;
 }
 
 .preset-name {
@@ -694,5 +678,44 @@ input:checked + .slider-switch:before {
 .file-info-value {
   color: var(--text-main);
   font-weight: 600;
+}
+
+/* Collapsible Control Groups */
+.collapsible-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.collapsible-header .chevron {
+  transition: transform 0.2s ease;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+}
+.collapsible.collapsed .collapsible-header .chevron {
+  transform: rotate(-90deg);
+}
+.collapsible-content {
+  max-height: 500px;
+  overflow: hidden;
+  transition: max-height 0.25s ease-in-out, opacity 0.2s ease-in-out;
+  opacity: 1;
+}
+.collapsible.collapsed .collapsible-content {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0 !important;
+}
+
+/* Workflow Hierarchy */
+.workflow-nested {
+  border-left: 2px solid var(--border-color);
+  padding-left: 12px;
+  margin-left: 15px;
+  margin-top: 10px;
+  transition: all 0.3s ease-in-out;
 }
 

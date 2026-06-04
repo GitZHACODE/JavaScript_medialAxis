@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Interactive 2D Medial Axis Transform (MAT) Visualizer</title>
   <meta name="description" content="An interactive real-time visualizer for the fast sampling-based 2D Medial Axis Transform algorithm. Draw custom polygons and inspect skeleton branches, junction points, and maximal inscribed circles.">
-  <script type="module" crossorigin src="/assets/index-C6mcTqJr.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-D264T-5c.css">
+  <script type="module" crossorigin src="/assets/index-cPjsTupr.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-joQxLv7Q.css">
 </head>
 <body>
 
@@ -73,56 +73,54 @@
           <h3>Shape Presets</h3>
           <div class="presets-grid">
             <div class="preset-card" data-preset="cross">
-              <span class="preset-icon">➕</span>
               <span class="preset-name">Cross</span>
             </div>
             <div class="preset-card" data-preset="yshape">
-              <span class="preset-icon">🇾</span>
               <span class="preset-name">Y-Shape</span>
             </div>
             <div class="preset-card" data-preset="sqdonut">
-              <span class="preset-icon">🍩</span>
               <span class="preset-name">Sq. Donut</span>
             </div>
             <div class="preset-card" data-preset="donut">
-              <span class="preset-icon">⭕</span>
               <span class="preset-name">Circ. Donut</span>
             </div>
             <div class="preset-card" data-preset="pentagon">
-              <span class="preset-icon">⬠</span>
               <span class="preset-name">Pentagon</span>
             </div>
             <div class="preset-card active" data-preset="tree">
-              <span class="preset-icon">🌲</span>
               <span class="preset-name">Branched Tree</span>
             </div>
             <div class="preset-card" id="card-custom" style="display: none;">
-              <span class="preset-icon">✏</span>
               <span class="preset-name">Custom</span>
             </div>
           </div>
         </section>
 
         <!-- Tracing Parameters -->
-        <section class="control-group">
-          <h3>MAT Parameters</h3>
+        <section class="control-group collapsible collapsed" id="section-mat-params">
+          <h3 class="collapsible-header" id="header-mat-params">
+            MAT Parameters
+            <span class="chevron">▼</span>
+          </h3>
 
-          <!-- Sampling Density Slider -->
-          <div class="slider-container">
-            <div class="slider-info">
-              <span class="slider-label">Samples per Edge</span>
-              <span class="slider-value" id="val-samples">25</span>
+          <div class="collapsible-content" id="content-mat-params">
+            <!-- Sampling Density Slider -->
+            <div class="slider-container" style="margin-top: 10px;">
+              <div class="slider-info">
+                <span class="slider-label">Samples per Edge</span>
+                <span class="slider-value" id="val-samples">25</span>
+              </div>
+              <input type="range" id="slider-samples" min="5" max="100" value="25">
             </div>
-            <input type="range" id="slider-samples" min="5" max="100" value="25">
-          </div>
 
-          <!-- Convergence Epsilon Slider -->
-          <div class="slider-container">
-            <div class="slider-info">
-              <span class="slider-label">Bisection Precision</span>
-              <span class="slider-value" id="val-precision">1e-5</span>
+            <!-- Convergence Epsilon Slider -->
+            <div class="slider-container" style="margin-top: 10px;">
+              <div class="slider-info">
+                <span class="slider-label">Bisection Precision</span>
+                <span class="slider-value" id="val-precision">1e-5</span>
+              </div>
+              <input type="range" id="slider-precision" min="3" max="7" value="5">
             </div>
-            <input type="range" id="slider-precision" min="3" max="7" value="5">
           </div>
         </section>
 
@@ -163,20 +161,13 @@
             </div>
             <input type="range" id="slider-merge" min="0" max="10" step="0.1" value="2">
           </div>
+        </section>
 
-          <!-- Prune Corner Branches -->
-          <div class="toggle-container" id="toggle-prune-container">
-            <div class="toggle-details">
-              <span class="toggle-label">Prune Corner Branches</span>
-              <span class="toggle-sub">Deletes edges connecting corners to internal nodes</span>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="chk-prune-branches">
-              <span class="slider-switch"></span>
-            </label>
-          </div>
+        <!-- Structural Workflow Section -->
+        <section class="control-group">
+          <h3>Structural Workflow</h3>
 
-          <!-- Draw Structural Ribs -->
+          <!-- Step 1: Draw Structural Ribs -->
           <div class="toggle-container" id="toggle-ribs-container">
             <div class="toggle-details">
               <span class="toggle-label">Draw Structural Ribs</span>
@@ -188,46 +179,69 @@
             </label>
           </div>
 
-          <!-- Rib Spacing Slider -->
-          <div class="slider-container" id="container-ribs-slider" style="display: none; margin-top: 10px; margin-bottom: 15px;">
-            <div class="slider-info">
-              <span class="slider-label">Rib Spacing (m)</span>
-              <span class="slider-value" id="val-ribs">5.0m</span>
-            </div>
-            <input type="range" id="slider-ribs" min="1" max="25" step="0.5" value="5">
-          </div>
-          <!-- Show Structural Bays -->
-          <div class="toggle-container" id="toggle-bays-container">
-            <div class="toggle-details">
-              <span class="toggle-label">Show Structural Bays</span>
-              <span class="toggle-sub">Draws enclosed cells as structural spaces</span>
-            </div>
-            <label class="switch">
-              <input type="checkbox" id="chk-show-bays">
-              <span class="slider-switch"></span>
-            </label>
-          </div>
-          
-          <!-- Edit Bays Sub-panel (hidden by default) -->
-          <div id="container-edit-bays" style="display: none; margin-top: 10px; margin-bottom: 15px; border: 1px dashed var(--border-color); padding: 12px; background: rgba(0,0,0,0.02);">
-            <div class="toggle-container" style="border: none; padding: 0 0 10px 0; background: transparent; cursor: default;">
+          <!-- Nested dependents block -->
+          <div class="workflow-nested" id="ribs-workflow-dependents" style="display: none; margin-left: 15px; border-left: 2px solid var(--border-color); padding-left: 12px; margin-top: 10px;">
+            
+            <!-- Step 2: Prune Corner Branches -->
+            <div class="toggle-container" id="toggle-prune-container" style="margin-bottom: 10px;">
               <div class="toggle-details">
-                <span class="toggle-label" style="font-size: 0.82rem; font-weight: 600;">Edit Bays Mode</span>
-                <span class="toggle-sub" style="font-size: 0.7rem;">Click cells in viewport to select them</span>
+                <span class="toggle-label" style="font-size: 0.82rem;">Prune Corner Branches</span>
+                <span class="toggle-sub" style="font-size: 0.7rem;">Deletes edges connecting corners to internal nodes</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="chk-edit-bays-mode">
+                <input type="checkbox" id="chk-prune-branches">
                 <span class="slider-switch"></span>
               </label>
             </div>
-            <div id="edit-bays-actions" style="display: none; grid-template-columns: 1fr; gap: 8px; margin-top: 8px;">
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-                <button class="btn" id="btn-combine-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center;" disabled>Combine</button>
-                <button class="btn" id="btn-delete-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; color: #ef4444; border-color: rgba(239, 68, 68, 0.2);" disabled>Delete</button>
+
+            <!-- Step 3: Rib Spacing Slider -->
+            <div class="slider-container" id="container-ribs-slider" style="margin-top: 10px; margin-bottom: 10px;">
+              <div class="slider-info">
+                <span class="slider-label" style="font-size: 0.82rem;">Rib Spacing (m)</span>
+                <span class="slider-value" id="val-ribs" style="font-size: 0.82rem;">5.0m</span>
               </div>
-              <button class="btn" id="btn-reset-bay-edits" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; width: 100%;">Reset Edits</button>
+              <input type="range" id="slider-ribs" min="1" max="25" step="0.5" value="5">
             </div>
+
+            <!-- Step 4: Show Structural Bays -->
+            <div class="toggle-container" id="toggle-bays-container" style="margin-top: 10px; margin-bottom: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label" style="font-size: 0.82rem;">Show Structural Bays</span>
+                <span class="toggle-sub" style="font-size: 0.7rem;">Draws enclosed cells as structural spaces</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-show-bays">
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+
+            <!-- Edit Bays Sub-panel (hidden by default) -->
+            <div id="container-edit-bays" style="display: none; margin-top: 10px; margin-bottom: 10px; border: 1px dashed var(--border-color); padding: 12px; background: rgba(0,0,0,0.02);">
+              <div class="toggle-container" style="border: none; padding: 0 0 10px 0; background: transparent; cursor: default;">
+                <div class="toggle-details">
+                  <span class="toggle-label" style="font-size: 0.82rem; font-weight: 600;">Edit Bays Mode</span>
+                  <span class="toggle-sub" style="font-size: 0.7rem;">Click cells in viewport to select them</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-edit-bays-mode">
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
+              <div id="edit-bays-actions" style="display: none; grid-template-columns: 1fr; gap: 8px; margin-top: 8px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                  <button class="btn" id="btn-combine-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center;" disabled>Combine</button>
+                  <button class="btn" id="btn-delete-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; color: #ef4444; border-color: rgba(239, 68, 68, 0.2);" disabled>Delete</button>
+                </div>
+                <button class="btn" id="btn-reset-bay-edits" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; width: 100%;">Reset Edits</button>
+              </div>
+            </div>
+
           </div>
+        </section>
+
+        <!-- Other settings section -->
+        <section class="control-group">
+          <h3>Interactive Helpers</h3>
           <!-- Show Inscribed Circle on Hover -->
           <div class="toggle-container" id="toggle-hover-circle-container">
             <div class="toggle-details">
