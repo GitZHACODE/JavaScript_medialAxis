@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { MedialAxisTransform } from './medialAxis.js';
 import { Vector2D } from './utils/vector2d.js';
-import { distanceToPolygon, closestPointOnSegment, pointInPolygon, mergePolygonCells } from './utils/geometry.js';
+import { distanceToPolygon, closestPointOnSegment, pointInPolygon, mergePolygonCells, intersectRaySegment } from './utils/geometry.js';
 import { RhinoManager } from './utils/RhinoManager.js';
 import { PlanarGraph } from './utils/planarGraph.js';
 
@@ -1682,6 +1682,57 @@ function draw() {
   build3DStack();
 }
 
+// Classifies a boundary segment based on outward ray casting
+function classifyBoundarySegment(p1, p2, normal, item, allPolygons) {
+  const mid = p1.add(p2).scale(0.5);
+  const rayOrigin = new Vector2D(mid.x + normal.x * 0.1, mid.y + normal.y * 0.1);
+  const rayDir = normal;
+
+  let closestHitDist = Infinity;
+  let closestHitType = 'open_space';
+
+  allPolygons.forEach(otherItem => {
+    const isSelf = otherItem.id === item.id;
+    for (let i = 0; i < otherItem.polygon.length; i++) {
+      const segStart = otherItem.polygon[i];
+      const segEnd = otherItem.polygon[(i + 1) % otherItem.polygon.length];
+      
+      if (isSelf) {
+        const d1 = segStart.dist(p1);
+        const d2 = segEnd.dist(p2);
+        const d3 = segStart.dist(p2);
+        const d4 = segEnd.dist(p1);
+        if ((d1 < 1e-4 && d2 < 1e-4) || (d3 < 1e-4 && d4 < 1e-4)) {
+          continue;
+        }
+      }
+
+      const hit = intersectRaySegment(rayOrigin, rayDir, segStart, segEnd);
+      if (hit && hit.s < closestHitDist) {
+        closestHitDist = hit.s;
+        closestHitType = isSelf ? 'courtyard' : 'other_building';
+      }
+    }
+  });
+
+  if (closestHitDist < 25.0) {
+    return closestHitType;
+  }
+  return 'open_space';
+}
+
+// Determines if a cell is a corner cell (touches any original boundary polygon vertices)
+function isCornerCell(cell, boundaryPolygon) {
+  for (const pt of cell) {
+    for (const bPt of boundaryPolygon) {
+      if (Math.hypot(pt.x - bPt.x, pt.y - bPt.y) < 0.1) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function build3DStack() {
   if (!stack3DGroup) return;
 
@@ -1755,16 +1806,26 @@ function build3DStack() {
           ny = dx / len;
         }
       }
-      boundaryNormals.push({ x: nx, y: ny, length: len });
+      boundaryNormals.push(new Vector2D(nx, ny));
     }
 
-    const slabShape = new THREE.Shape();
-    slabShape.moveTo(state.polygon[0].x, state.polygon[0].y);
-    for (let j = 1; j < state.polygon.length; j++) {
-      slabShape.lineTo(state.polygon[j].x, state.polygon[j].y);
+    // Classify all boundary segments for context-aware facades
+    const segmentContexts = [];
+    for (let j = 0; j < state.polygon.length; j++) {
+      const p1 = state.polygon[j];
+      const p2 = state.polygon[(j + 1) % state.polygon.length];
+      const normal = boundaryNormals[j];
+      const context = classifyBoundarySegment(p1, p2, normal, item, state.importedPolygons);
+      segmentContexts.push(context);
     }
-    slabShape.closePath();
-    const slabGeom = new THREE.ExtrudeGeometry(slabShape, { depth: state.slabThickness, bevelEnabled: false });
+
+    // Classify all structural bays (cells) for corner vault adaptivity
+    const cellIsCorner = [];
+    if (state.structuralBays) {
+      state.structuralBays.forEach(cell => {
+        cellIsCorner.push(isCornerCell(cell, state.polygon));
+      });
+    }
 
     const vertices = state.planarGraph ? state.planarGraph.vertices : state.polygon;
     const edges = [];
@@ -1780,114 +1841,263 @@ function build3DStack() {
       }
     }
 
-    const colHeight = floorHeight - state.slabThickness;
-    const colGeom = new THREE.CylinderGeometry(state.columnRadius, state.columnRadius, colHeight, 16);
-    colGeom.rotateX(Math.PI / 2);
-
     for (let i = 0; i < numFloors; i++) {
       const zFloor = i * floorHeight;
+      const isGroundFloor = i === 0;
+      const isRoofFloor = i === numFloors - 1;
 
+      // 1. Floor Slabs
       if (state.showFloorSlabs) {
+        let slabThick = state.slabThickness;
+        if (isGroundFloor) {
+          slabThick = state.slabThickness * 1.5;
+        } else if (isRoofFloor) {
+          slabThick = state.slabThickness * 0.8;
+        }
+
+        const slabShape = new THREE.Shape();
+        slabShape.moveTo(state.polygon[0].x, state.polygon[0].y);
+        for (let j = 1; j < state.polygon.length; j++) {
+          slabShape.lineTo(state.polygon[j].x, state.polygon[j].y);
+        }
+        slabShape.closePath();
+
+        const slabGeom = new THREE.ExtrudeGeometry(slabShape, { depth: slabThick, bevelEnabled: false });
         const slabMesh = new THREE.Mesh(slabGeom, slabMat);
-        slabMesh.position.z = zFloor - state.slabThickness;
+        slabMesh.position.z = zFloor - slabThick;
         slabMesh.userData = { is3DStackMesh: true, polygonId: item.id };
         stack3DGroup.add(slabMesh);
       }
 
+      // 2. Columns
       if (state.show3DColumns) {
+        let slabThick = state.slabThickness;
+        if (isGroundFloor) slabThick = state.slabThickness * 1.5;
+        else if (isRoofFloor) slabThick = state.slabThickness * 0.8;
+        
+        const colHeight = floorHeight - slabThick;
+
+        let tapFactor = 1.0;
+        if (numFloors > 1) {
+          tapFactor = 1.4 - 0.7 * (i / (numFloors - 1));
+        }
+        const colRad = state.columnRadius * tapFactor;
+
+        const colGeom = new THREE.CylinderGeometry(colRad, colRad, colHeight, 16);
+        colGeom.rotateX(Math.PI / 2);
+
+        // L-shaped corner pier geometry for boundary corner columns
+        const lWidth = colRad * 2.2;
+        const lThick = colRad * 0.8;
+        const lShape = new THREE.Shape();
+        lShape.moveTo(-lWidth/2, -lWidth/2);
+        lShape.lineTo(lWidth/2, -lWidth/2);
+        lShape.lineTo(lWidth/2, -lWidth/2 + lThick);
+        lShape.lineTo(-lWidth/2 + lThick, -lWidth/2 + lThick);
+        lShape.lineTo(-lWidth/2 + lThick, lWidth/2);
+        lShape.lineTo(-lWidth/2, lWidth/2);
+        lShape.closePath();
+        const cornerGeom = new THREE.ExtrudeGeometry(lShape, { depth: colHeight, bevelEnabled: false });
+
         vertices.forEach(v => {
-          const colMesh = new THREE.Mesh(colGeom, columnMat);
-          colMesh.position.set(v.x, v.y, zFloor + colHeight / 2);
-          colMesh.userData = { is3DStackMesh: true, polygonId: item.id };
-          stack3DGroup.add(colMesh);
+          let isCornerVertex = false;
+          for (const bp of state.polygon) {
+            if (Math.hypot(v.x - bp.x, v.y - bp.y) < 0.1) {
+              isCornerVertex = true;
+              break;
+            }
+          }
+
+          let mesh;
+          if (isCornerVertex) {
+            mesh = new THREE.Mesh(cornerGeom, columnMat);
+            mesh.position.set(v.x, v.y, zFloor);
+          } else {
+            mesh = new THREE.Mesh(colGeom, columnMat);
+            mesh.position.set(v.x, v.y, zFloor + colHeight / 2);
+          }
+          mesh.userData = { is3DStackMesh: true, polygonId: item.id };
+          stack3DGroup.add(mesh);
         });
+
+        colGeom.dispose();
+        cornerGeom.dispose();
       }
 
+      // 3. Beams
       if (state.show3DBeams) {
+        let tapFactor = 1.0;
+        if (numFloors > 1) {
+          tapFactor = 1.3 - 0.5 * (i / (numFloors - 1));
+        }
+        const bWidth = state.beamWidth * tapFactor;
+        const bDepth = state.beamDepth * tapFactor;
+
+        let slabThick = state.slabThickness;
+        if (isGroundFloor) slabThick = state.slabThickness * 1.5;
+        else if (isRoofFloor) slabThick = state.slabThickness * 0.8;
+
         edges.forEach(([ptU, ptV]) => {
           const dx = ptV.x - ptU.x;
           const dy = ptV.y - ptU.y;
           const len = Math.hypot(dx, dy);
           if (len < 1e-3) return;
 
-          const beamGeom = new THREE.BoxGeometry(len, state.beamWidth, state.beamDepth);
+          const beamGeom = new THREE.BoxGeometry(len, bWidth, bDepth);
           const beamMesh = new THREE.Mesh(beamGeom, beamMat);
           const midX = (ptU.x + ptV.x) / 2;
           const midY = (ptU.y + ptV.y) / 2;
-          const midZ = zFloor - state.slabThickness - state.beamDepth / 2;
+          const midZ = zFloor - slabThick - bDepth / 2;
           beamMesh.position.set(midX, midY, midZ);
           beamMesh.rotation.z = Math.atan2(dy, dx);
           beamMesh.userData = { is3DStackMesh: true, polygonId: item.id };
           stack3DGroup.add(beamMesh);
+          
+          beamGeom.dispose();
         });
       }
 
-      if (state.showBalconies) {
+      // 4. Balconies (NULL on Ground & Roof, NULL if facing other buildings)
+      if (state.showBalconies && !isGroundFloor && !isRoofFloor) {
         for (let j = 0; j < state.polygon.length; j++) {
           const p1 = state.polygon[j];
           const p2 = state.polygon[(j + 1) % state.polygon.length];
           const normal = boundaryNormals[j];
-          const len = normal.length;
+          const context = segmentContexts[j];
+          const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
           if (len < 1e-3) continue;
 
-          const balGeom = new THREE.BoxGeometry(len, state.balconyOffset, state.balconyThickness);
+          if (context === 'other_building') {
+            continue; // NULL balcony facing neighboring buildings for privacy
+          }
+
+          let bOffset = state.balconyOffset;
+          if (context === 'courtyard') {
+            bOffset = state.balconyOffset * 1.5; // Deeper social balcony facing courtyard
+          }
+
+          // Beveled rounded geometry for balconies
+          const halfL = len / 2;
+          const roundedShape = new THREE.Shape();
+          const radius = Math.min(0.8, bOffset * 0.4);
+          roundedShape.moveTo(-halfL, 0);
+          roundedShape.lineTo(-halfL, bOffset - radius);
+          roundedShape.quadraticCurveTo(-halfL, bOffset, -halfL + radius, bOffset);
+          roundedShape.lineTo(halfL - radius, bOffset);
+          roundedShape.quadraticCurveTo(halfL, bOffset, halfL, bOffset - radius);
+          roundedShape.lineTo(halfL, 0);
+          roundedShape.closePath();
+
+          const balGeom = new THREE.ExtrudeGeometry(roundedShape, { depth: state.balconyThickness, bevelEnabled: false });
           const balMesh = new THREE.Mesh(balGeom, balconySlabMat);
-          const midX = (p1.x + p2.x) / 2 + normal.x * (state.balconyOffset / 2);
-          const midY = (p1.y + p2.y) / 2 + normal.y * (state.balconyOffset / 2);
-          const midZ = zFloor - state.balconyThickness / 2;
+          
+          const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+          const midX = (p1.x + p2.x) / 2;
+          const midY = (p1.y + p2.y) / 2;
+          const midZ = zFloor - state.balconyThickness;
+
           balMesh.position.set(midX, midY, midZ);
-          balMesh.rotation.z = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+          balMesh.rotation.z = angle;
           balMesh.userData = { is3DStackMesh: true, polygonId: item.id };
           stack3DGroup.add(balMesh);
 
+          // railing along the outer rounded edge
           const railingHeight = 1.1;
-          const railingThick = 0.02;
-          const railGeom = new THREE.BoxGeometry(len, railingThick, railingHeight);
+          const rThick = 0.02;
+          const railShape = new THREE.Shape();
+          railShape.moveTo(-halfL, bOffset - rThick);
+          railShape.lineTo(halfL, bOffset - rThick);
+          railShape.lineTo(halfL, bOffset);
+          railShape.lineTo(-halfL, bOffset);
+          railShape.closePath();
+
+          const railGeom = new THREE.ExtrudeGeometry(railShape, { depth: railingHeight, bevelEnabled: false });
           const railMesh = new THREE.Mesh(railGeom, railingMat);
-          const railX = (p1.x + p2.x) / 2 + normal.x * state.balconyOffset;
-          const railY = (p1.y + p2.y) / 2 + normal.y * state.balconyOffset;
-          const railZ = zFloor + railingHeight / 2;
-          railMesh.position.set(railX, railY, railZ);
-          railMesh.rotation.z = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+          railMesh.position.set(midX, midY, zFloor);
+          railMesh.rotation.z = angle;
           railMesh.userData = { is3DStackMesh: true, polygonId: item.id };
           stack3DGroup.add(railMesh);
+
+          balGeom.dispose();
+          railGeom.dispose();
         }
       }
 
-      if (state.showBriseSoleil) {
+      // 5. Brise-Soleil (NULL on Ground, NULL on North/East facades)
+      if (state.showBriseSoleil && !isGroundFloor) {
+        const sunDir = new Vector2D(-0.707, -0.707); // Southwest Sun Vector
+
         for (let j = 0; j < state.polygon.length; j++) {
           const p1 = state.polygon[j];
           const p2 = state.polygon[(j + 1) % state.polygon.length];
           const normal = boundaryNormals[j];
-          const len = normal.length;
+          const context = segmentContexts[j];
+          const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
           if (len < 1e-3) continue;
 
-          const spacing = state.louverSpacing;
-          const numLouvers = Math.max(2, Math.floor(len / spacing));
-          const lHeight = floorHeight - state.slabThickness;
-          const louverGeom = new THREE.BoxGeometry(state.louverWidth, state.louverDepth, lHeight);
+          const alignment = normal.dot(sunDir);
+
+          let bDepth = state.louverDepth;
+          let bSpacing = state.louverSpacing;
+          let active = true;
+
+          if (context === 'other_building') {
+            bDepth = state.louverDepth * 0.8;
+            bSpacing = state.louverSpacing * 0.6; // Dense privacy screening
+          } else if (context === 'courtyard') {
+            active = false; // NULL brise-soleil to keep courtyard views open
+          } else {
+            if (alignment > 0) {
+              bDepth = state.louverDepth * (0.3 + 1.2 * alignment); // Solar alignment gradient
+              bSpacing = state.louverSpacing * (1.2 - 0.5 * alignment);
+            } else {
+              active = false; // NULL brise-soleil on shaded facades
+            }
+          }
+
+          if (!active) continue;
+
+          const numLouvers = Math.max(2, Math.floor(len / bSpacing));
+          
+          let slabThick = state.slabThickness;
+          if (isGroundFloor) slabThick = state.slabThickness * 1.5;
+          else if (isRoofFloor) slabThick = state.slabThickness * 0.8;
+          const lHeight = floorHeight - slabThick;
+
+          // Aerofoil Diamond shape louvers (CAGD)
+          const lWidth = state.louverWidth;
+          const foilShape = new THREE.Shape();
+          foilShape.moveTo(0, -bDepth/2);
+          foilShape.quadraticCurveTo(lWidth/2, 0, 0, bDepth/2);
+          foilShape.quadraticCurveTo(-lWidth/2, 0, 0, -bDepth/2);
+          foilShape.closePath();
+
+          const louverGeom = new THREE.ExtrudeGeometry(foilShape, { depth: lHeight, bevelEnabled: false });
 
           for (let k = 0; k <= numLouvers; k++) {
             const t = k / numLouvers;
             const lx = p1.x + (p2.x - p1.x) * t + normal.x * 0.15;
             const ly = p1.y + (p2.y - p1.y) * t + normal.y * 0.15;
-            const lz = zFloor + lHeight / 2;
-
+            
             const lMesh = new THREE.Mesh(louverGeom, louverMat);
-            lMesh.position.set(lx, ly, lz);
-            lMesh.rotation.z = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+            lMesh.position.set(lx, ly, zFloor);
+            const segmentAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+            lMesh.rotation.z = segmentAngle;
             lMesh.userData = { is3DStackMesh: true, polygonId: item.id };
             stack3DGroup.add(lMesh);
           }
+          
+          louverGeom.dispose();
         }
       }
     }
 
+    // 6. Vaulted Roofs (Roof top floor only, Standard vs Butterfly)
     if (state.showVaultedRoofs && state.structuralBays && state.structuralBays.length > 0) {
       const zTop = (numFloors - 1) * floorHeight;
       const M = 8;
 
-      state.structuralBays.forEach((cell) => {
+      state.structuralBays.forEach((cell, cellIdx) => {
         if (cell.length < 3) return;
 
         const centroid = getCentroid(cell);
@@ -1895,6 +2105,8 @@ function build3DStack() {
         cell.forEach(pt => { sumDist += Math.hypot(pt.x - centroid.x, pt.y - centroid.y); });
         const R_avg = sumDist / cell.length;
         if (R_avg < 1e-3) return;
+
+        const isCorner = cellIsCorner[cellIdx];
 
         const cellVertices = [];
         const cellIndices = [];
@@ -1916,8 +2128,15 @@ function build3DStack() {
               const x = centroid.x + (bx - centroid.x) * tCent;
               const y = centroid.y + (by - centroid.y) * tCent;
               const d = Math.hypot(x - centroid.x, y - centroid.y);
-              const heightFactor = Math.max(0, 1 - (d / R_avg) ** 2);
-              const z = zTop + state.vaultHeight * heightFactor;
+              
+              let z;
+              if (isCorner) {
+                const heightFactor = (d / R_avg) ** 2;
+                z = zTop + state.vaultHeight * (0.2 + 0.8 * heightFactor); // Butterfly flared canopy
+              } else {
+                const heightFactor = Math.max(0, 1 - (d / R_avg) ** 2);
+                z = zTop + state.vaultHeight * heightFactor; // Standard dome
+              }
               cellVertices.push(x, y, z);
             }
           }

@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { Vector2D } from './vector2d.js';
+import { intersectRaySegment } from './geometry.js';
 
 export class RhinoManager {
     constructor(appContext) {
@@ -271,6 +273,51 @@ export class RhinoManager {
                     bays.push(cell.map(v => [v.x, v.y, 0.0]));
                 });
             }
+
+            // Compute boundary segment classifications
+            let isCCW = true;
+            let area = 0;
+            for (let j = 0; j < item.polygon.length; j++) {
+                const p1 = item.polygon[j];
+                const p2 = item.polygon[(j + 1) % item.polygon.length];
+                area += (p1.x * p2.y - p2.x * p1.y);
+            }
+            isCCW = area > 0;
+
+            const boundaryNormals = [];
+            for (let j = 0; j < item.polygon.length; j++) {
+                const p1 = item.polygon[j];
+                const p2 = item.polygon[(j + 1) % item.polygon.length];
+                const dx = p2.x - p1.x;
+                const dy = p2.y - p1.y;
+                const len = Math.hypot(dx, dy);
+                let nx = 0, ny = 0;
+                if (len > 1e-6) {
+                    if (isCCW) {
+                        nx = dy / len;
+                        ny = -dx / len;
+                    } else {
+                        nx = -dy / len;
+                        ny = dx / len;
+                    }
+                }
+                boundaryNormals.push(new Vector2D(nx, ny));
+            }
+
+            const segmentContexts = [];
+            for (let j = 0; j < item.polygon.length; j++) {
+                const p1 = item.polygon[j];
+                const p2 = item.polygon[(j + 1) % item.polygon.length];
+                const normal = boundaryNormals[j];
+                segmentContexts.push(classifyBoundarySegment(p1, p2, normal, item, this.appContext.state.importedPolygons));
+            }
+
+            const cellIsCorner = [];
+            if (item.structuralBays) {
+                item.structuralBays.forEach(cell => {
+                    cellIsCorner.push(isCornerCell(cell, item.polygon));
+                });
+            }
             
             return {
                 boundary,
@@ -280,7 +327,10 @@ export class RhinoManager {
                 circles,
                 bays,
                 planarGraphVertices: item.planarGraph ? item.planarGraph.vertices.map(v => [v.x, v.y, 0.0]) : null,
-                planarGraphEdges: item.planarGraph ? item.planarGraph.edges.map(e => [e[0], e[1]]) : null
+                planarGraphEdges: item.planarGraph ? item.planarGraph.edges.map(e => [e[0], e[1]]) : null,
+                segmentContexts,
+                cellIsCorner,
+                boundaryNormals: boundaryNormals.map(n => [n.x, n.y, 0.0])
             };
         });
         
@@ -340,4 +390,55 @@ export class RhinoManager {
             });
         });
     }
+}
+
+// Classifies a boundary segment based on outward ray casting
+function classifyBoundarySegment(p1, p2, normal, item, allPolygons) {
+  const mid = p1.add(p2).scale(0.5);
+  const rayOrigin = new Vector2D(mid.x + normal.x * 0.1, mid.y + normal.y * 0.1);
+  const rayDir = normal;
+
+  let closestHitDist = Infinity;
+  let closestHitType = 'open_space';
+
+  allPolygons.forEach(otherItem => {
+    const isSelf = otherItem.id === item.id;
+    for (let i = 0; i < otherItem.polygon.length; i++) {
+      const segStart = otherItem.polygon[i];
+      const segEnd = otherItem.polygon[(i + 1) % otherItem.polygon.length];
+      
+      if (isSelf) {
+        const d1 = segStart.dist(p1);
+        const d2 = segEnd.dist(p2);
+        const d3 = segStart.dist(p2);
+        const d4 = segEnd.dist(p1);
+        if ((d1 < 1e-4 && d2 < 1e-4) || (d3 < 1e-4 && d4 < 1e-4)) {
+          continue;
+        }
+      }
+
+      const hit = intersectRaySegment(rayOrigin, rayDir, segStart, segEnd);
+      if (hit && hit.s < closestHitDist) {
+        closestHitDist = hit.s;
+        closestHitType = isSelf ? 'courtyard' : 'other_building';
+      }
+    }
+  });
+
+  if (closestHitDist < 25.0) {
+    return closestHitType;
+  }
+  return 'open_space';
+}
+
+// Determines if a cell is a corner cell (touches any original boundary polygon vertices)
+function isCornerCell(cell, boundaryPolygon) {
+  for (const pt of cell) {
+    for (const bPt of boundaryPolygon) {
+      if (Math.hypot(pt.x - bPt.x, pt.y - bPt.y) < 0.1) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
