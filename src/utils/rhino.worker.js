@@ -1616,7 +1616,7 @@ self.onmessage = async function(e) {
                                 if (bays && bays.length > 0) {
                                     bays.forEach((cell, cellIdx) => {
                                         const isCorner = cellIsCorner[cellIdx] || false;
-                                        if (isCorner && i < 1) return;
+                                        if (isCorner && i < numFloors - 2) return;
 
                                         const warpedCell = getWarpedCell(cell, boundary, floorPolygon);
                                         const attr = new rhino.ObjectAttributes();

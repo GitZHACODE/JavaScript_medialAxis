@@ -912,6 +912,81 @@ function filterPlanarGraphByActiveBays(graph, activeBays) {
   graph.vertices = newVertices;
   graph.originalVertices = newOriginalVertices;
   graph.edges = mappedEdges;
+
+  // Prune valence-2 boundary vertices for donut preset
+  if (state.activePreset === 'donut') {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const n = graph.vertices.length;
+      const incidentEdges = Array.from({ length: n }, () => []);
+      for (let i = 0; i < graph.edges.length; i++) {
+        const edge = graph.edges[i];
+        incidentEdges[edge[0]].push(i);
+        incidentEdges[edge[1]].push(i);
+      }
+      
+      let targetV = -1;
+      let edgeIdx1 = -1;
+      let edgeIdx2 = -1;
+      
+      for (let i = 0; i < n; i++) {
+        const edgesForV = incidentEdges[i];
+        if (edgesForV.length === 2) {
+          const e1 = graph.edges[edgesForV[0]];
+          const e2 = graph.edges[edgesForV[1]];
+          if (e1[2] === 'boundary' && e2[2] === 'boundary') {
+            targetV = i;
+            edgeIdx1 = edgesForV[0];
+            edgeIdx2 = edgesForV[1];
+            break;
+          }
+        }
+      }
+      
+      if (targetV !== -1) {
+        const e1 = graph.edges[edgeIdx1];
+        const e2 = graph.edges[edgeIdx2];
+        const u = (e1[0] === targetV) ? e1[1] : e1[0];
+        const w = (e2[0] === targetV) ? e2[1] : e2[0];
+        
+        const nextEdges = [];
+        for (let i = 0; i < graph.edges.length; i++) {
+          if (i !== edgeIdx1 && i !== edgeIdx2) {
+            nextEdges.push(graph.edges[i]);
+          }
+        }
+        
+        const exists = nextEdges.some(e => (e[0] === u && e[1] === w) || (e[0] === w && e[1] === u));
+        if (!exists && u !== w) {
+          nextEdges.push([u, w, 'boundary']);
+        }
+        
+        graph.edges = nextEdges;
+        
+        const newVerts = [];
+        const newOrigVerts = [];
+        const indexMap = new Map();
+        for (let i = 0; i < n; i++) {
+          if (i !== targetV) {
+            indexMap.set(i, newVerts.length);
+            newVerts.push(graph.vertices[i]);
+            newOrigVerts.push(graph.originalVertices[i]);
+          }
+        }
+        
+        graph.vertices = newVerts;
+        graph.originalVertices = newOrigVerts;
+        graph.edges = graph.edges.map(e => [
+          indexMap.get(e[0]),
+          indexMap.get(e[1]),
+          e[2]
+        ]);
+        
+        changed = true;
+      }
+    }
+  }
 }
 
 // Compute the Medial Axis Transform using core library class
@@ -3020,7 +3095,7 @@ function build3DStack() {
         if (i > 0) {
           state.structuralBays.forEach((cell, cellIdx) => {
             const isCorner = cellIsCorner[cellIdx];
-            if (isCorner && i < 1) return;
+            if (isCorner && i < numFloors - 2) return;
 
             const warpedCell = getWarpedCell(cell, state.polygon, floorPolygon);
             const isGround = (i === 0);
