@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { MedialAxisTransform } from './medialAxis.js';
+import { ImagenAPI } from './ImagenAPI.js';
 import { Vector2D } from './utils/vector2d.js';
 import { distanceToPolygon, closestPointOnSegment, pointInPolygon, mergePolygonCells, intersectRaySegment } from './utils/geometry.js';
 import { RhinoManager } from './utils/RhinoManager.js';
@@ -222,7 +223,8 @@ function initThree() {
   renderer = new THREE.WebGLRenderer({
     canvas: canvas,
     antialias: true,
-    alpha: true
+    alpha: true,
+    preserveDrawingBuffer: true
   });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(width, height);
@@ -2955,6 +2957,30 @@ function setupRhinoUIControls() {
       draw();
     });
   }
+
+  // Minimize AI Render panel
+  const btnMinimizeAiRender = document.getElementById('btn-minimize-ai-render');
+  const aiRenderPanel = document.getElementById('ai-render-panel');
+  if (btnMinimizeAiRender && aiRenderPanel) {
+    btnMinimizeAiRender.addEventListener('click', () => {
+      aiRenderPanel.classList.toggle('collapsed');
+      const span = btnMinimizeAiRender.querySelector('span');
+      if (span) {
+        span.innerText = aiRenderPanel.classList.contains('collapsed') ? '▲' : '▼';
+      }
+    });
+  }
+
+  // Display Mode Select
+  const selectDisplayMode = document.getElementById('display-mode-select');
+  if (selectDisplayMode) {
+    selectDisplayMode.addEventListener('change', (e) => {
+      setDisplayMode(e.target.value);
+    });
+  }
+
+  // Set up Imagen controls
+  setupImagenControls();
 }
 
 // Mouse Event Handlers using 3D Raycasting
@@ -3199,8 +3225,271 @@ function animate() {
   // Update controls with smooth damping
   controls.update();
   
+  // If rendering depth, update depth shader range uniforms dynamically based on current camera view
+  if (scene.overrideMaterial === depthMaterial && depthMaterial) {
+    const range = getDepthRange();
+    depthMaterial.uniforms.cameraNear.value = range.min;
+    depthMaterial.uniforms.cameraFar.value = range.max;
+  }
+  
   // Render frame
   renderer.render(scene, cameraActive);
+}
+
+let depthMaterial = null;
+let _gizmoWasVisible = true;
+let _gridWasVisible = true;
+
+function getDepthRange() {
+  const box = new THREE.Box3();
+  
+  if (meshesGroup) box.expandByObject(meshesGroup);
+  if (stack3DGroup) box.expandByObject(stack3DGroup);
+  if (rhinoGroup) box.expandByObject(rhinoGroup);
+  
+  if (box.isEmpty()) {
+    return { min: cameraActive.near, max: cameraActive.far };
+  }
+  
+  const corners = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z)
+  ];
+  
+  let minDepth = Infinity;
+  let maxDepth = -Infinity;
+  
+  const viewMatrix = cameraActive.matrixWorldInverse;
+  
+  corners.forEach(corner => {
+    corner.applyMatrix4(viewMatrix);
+    const depth = -corner.z;
+    if (depth < minDepth) minDepth = depth;
+    if (depth > maxDepth) maxDepth = depth;
+  });
+  
+  minDepth = Math.max(cameraActive.near, minDepth - 5.0);
+  maxDepth = Math.min(cameraActive.far, maxDepth + 5.0);
+  
+  if (maxDepth <= minDepth) {
+    maxDepth = minDepth + 10.0;
+  }
+  
+  return { min: minDepth, max: maxDepth };
+}
+
+function setDisplayMode(mode) {
+  if (mode === 'DEPTH') {
+    const range = getDepthRange();
+    
+    if (!depthMaterial) {
+      depthMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          cameraNear: { value: range.min },
+          cameraFar: { value: range.max }
+        },
+        vertexShader: `
+          varying float vDepth;
+          void main() {
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_Position = projectionMatrix * mvPosition;
+            vDepth = -mvPosition.z;
+          }
+        `,
+        fragmentShader: `
+          uniform float cameraNear;
+          uniform float cameraFar;
+          varying float vDepth;
+          void main() {
+            float d = clamp((vDepth - cameraNear) / (cameraFar - cameraNear), 0.0, 1.0);
+            gl_FragColor = vec4(vec3(d), 1.0);
+          }
+        `
+      });
+    }
+    depthMaterial.uniforms.cameraNear.value = range.min;
+    depthMaterial.uniforms.cameraFar.value = range.max;
+    scene.overrideMaterial = depthMaterial;
+    
+    // Hide widgets
+    if (transformControls) {
+      _gizmoWasVisible = transformControls.visible;
+      transformControls.visible = false;
+    }
+    // Hide grid helper
+    const grid = scene.children.find(c => c instanceof THREE.GridHelper);
+    if (grid) {
+      _gridWasVisible = grid.visible;
+      grid.visible = false;
+    }
+  } else {
+    scene.overrideMaterial = null;
+    if (transformControls) {
+      transformControls.visible = _gizmoWasVisible;
+    }
+    const grid = scene.children.find(c => c instanceof THREE.GridHelper);
+    if (grid) {
+      grid.visible = _gridWasVisible;
+    }
+  }
+}
+
+function setupImagenControls() {
+  const btnGen = document.getElementById('btn-generate-imagen');
+  const btnShow = document.getElementById('btn-show-imagen');
+  const statusDiv = document.getElementById('imagen-status');
+  const modal = document.getElementById('imagen-modal');
+  const btnClose = document.getElementById('btn-close-imagen');
+  const resultImg = document.getElementById('imagen-result-img');
+  const promptInput = document.getElementById('imagen-prompt');
+  
+  const btnPrev = document.getElementById('btn-prev-imagen');
+  const btnNext = document.getElementById('btn-next-imagen');
+  const btnSave = document.getElementById('btn-save-imagen');
+  const modalTitle = document.getElementById('imagen-modal-title');
+  
+  if (!btnGen || !modal) return;
+  
+  // Construct a compatible viewport mock for the ImagenAPI client
+  const mockViewport = {
+    container: wrapper,
+    renderer: renderer,
+    get camera() { return cameraActive; },
+    controls: controls,
+    osmGroup: null,
+    osmFeature: null,
+    composer: {
+      setSize: (w, h) => {}
+    },
+    saoPass: null,
+    setDisplayMode: (mode) => setDisplayMode(mode),
+    render: () => {
+      renderer.render(scene, cameraActive);
+    },
+    onWindowResize: () => {
+      resizeCanvas();
+    }
+  };
+
+  const api = new ImagenAPI(mockViewport);
+  
+  // Modal state
+  let currentImages = [];
+  let currentIndex = 0;
+  const titles = ["Beauty Render", "Depth Stencil", "AI Render Result"];
+  
+  const updateModalImage = () => {
+    if (currentImages.length === 0) return;
+    resultImg.src = currentImages[currentIndex];
+    modalTitle.textContent = titles[currentIndex];
+  };
+
+  btnGen.addEventListener('click', async () => {
+    const prompt = promptInput.value.trim();
+    if (!prompt) {
+      alert("Please enter prompt constraints.");
+      return;
+    }
+    
+    btnGen.disabled = true;
+    statusDiv.textContent = 'Initializing...';
+    
+    const adjustModalSize = () => {
+      const content = document.getElementById('imagen-modal-content');
+      if (content) {
+        const dpr = window.devicePixelRatio || 1;
+        content.style.width = `${1365 / dpr}px`;
+        content.style.height = `${768 / dpr}px`;
+      }
+    };
+
+    window.addEventListener('resize', () => {
+      if (modal.style.display === 'flex') {
+        adjustModalSize();
+      }
+    });
+
+    try {
+      const data = await api.generateRender(prompt, (msg) => {
+        statusDiv.textContent = msg;
+      }, (beautyUrl, depthUrl) => {
+        currentImages = [beautyUrl, depthUrl];
+        currentIndex = 0; // Default to showing beauty render immediately
+        updateModalImage();
+        adjustModalSize();
+        modal.style.display = 'flex';
+        if (btnShow) btnShow.style.display = 'block';
+      });
+      
+      currentImages = [data.beauty, data.depth, data.result];
+      currentIndex = 2; // Switch to showing result when done
+      updateModalImage();
+      statusDiv.textContent = 'Success!';
+    } catch (err) {
+      // error handled in api already but update UI
+    } finally {
+      btnGen.disabled = false;
+    }
+  });
+  
+  if (btnShow) {
+    btnShow.addEventListener('click', () => {
+      if (currentImages.length > 0) {
+        const adjustModalSize = () => {
+          const content = document.getElementById('imagen-modal-content');
+          if (content) {
+            const dpr = window.devicePixelRatio || 1;
+            content.style.width = `${1365 / dpr}px`;
+            content.style.height = `${768 / dpr}px`;
+          }
+        };
+        adjustModalSize();
+        modal.style.display = 'flex';
+      }
+    });
+  }
+  
+  btnPrev.addEventListener('click', () => {
+    if (currentImages.length === 0) return;
+    currentIndex = (currentIndex - 1 + currentImages.length) % currentImages.length;
+    updateModalImage();
+  });
+
+  btnNext.addEventListener('click', () => {
+    if (currentImages.length === 0) return;
+    currentIndex = (currentIndex + 1) % currentImages.length;
+    updateModalImage();
+  });
+
+  btnSave.addEventListener('click', () => {
+    if (currentImages.length === 0) return;
+    const a = document.createElement('a');
+    a.href = currentImages[currentIndex];
+    a.download = titles[currentIndex].replace(/\s+/g, '_').toLowerCase() + '.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+  
+  btnClose.addEventListener('click', () => {
+    modal.style.display = 'none';
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (modal.style.display === 'flex') {
+      if (e.key === 'ArrowLeft' || e.key === '<' || e.key === ',') {
+        btnPrev.click();
+      } else if (e.key === 'ArrowRight' || e.key === '>' || e.key === '.') {
+        btnNext.click();
+      } else if (e.key === 'Escape') {
+        btnClose.click();
+      }
+    }
+  });
 }
 
 // Initialise App
