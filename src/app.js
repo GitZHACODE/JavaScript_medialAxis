@@ -701,6 +701,139 @@ const presets = {
       new Vector2D(cx - s*0.1,  cy - s*0.1),
       new Vector2D(cx - s*0.1,  cy - s*0.4)
     ];
+  },
+  grid2x2: (w, h) => {
+    const s = 100;
+    const points = [];
+
+    const getCrossPt = (idx) => {
+      const cx = -60, cy = 60;
+      const pts = [
+        new Vector2D(cx - s*0.1, cy + s*0.3),
+        new Vector2D(cx + s*0.1, cy + s*0.3),
+        new Vector2D(cx + s*0.1, cy + s*0.1),
+        new Vector2D(cx + s*0.3, cy + s*0.1),
+        new Vector2D(cx + s*0.3, cy - s*0.1),
+        new Vector2D(cx + s*0.1, cy - s*0.1),
+        new Vector2D(cx + s*0.1, cy - s*0.3),
+        new Vector2D(cx - s*0.1, cy - s*0.3),
+        new Vector2D(cx - s*0.1, cy - s*0.1),
+        new Vector2D(cx - s*0.3, cy - s*0.1),
+        new Vector2D(cx - s*0.3, cy + s*0.1),
+        new Vector2D(cx - s*0.1, cy + s*0.1)
+      ];
+      return pts[idx];
+    };
+
+    const getSqDonutPt = (idx) => {
+      const cx = 60, cy = 60;
+      const pts = [
+        new Vector2D(cx - s*0.01, cy + s*0.3),
+        new Vector2D(cx - s*0.3,  cy + s*0.3),
+        new Vector2D(cx - s*0.3,  cy - s*0.3),
+        new Vector2D(cx + s*0.3,  cy - s*0.3),
+        new Vector2D(cx + s*0.3,  cy + s*0.3),
+        new Vector2D(cx + s*0.01, cy + s*0.3),
+        new Vector2D(cx + s*0.01, cy + s*0.1),
+        new Vector2D(cx + s*0.1,  cy + s*0.1),
+        new Vector2D(cx + s*0.1,  cy - s*0.1),
+        new Vector2D(cx - s*0.1,  cy - s*0.1),
+        new Vector2D(cx - s*0.1,  cy + s*0.1),
+        new Vector2D(cx - s*0.01, cy + s*0.1)
+      ];
+      return pts[idx];
+    };
+
+    const getYShapePt = (idx) => {
+      const cx = 60, cy = -60;
+      const pts = [
+        new Vector2D(cx + s*0.1, cy - s*0.4),
+        new Vector2D(cx + s*0.1, cy - s*0.1),
+        new Vector2D(cx + s*0.4, cy + s*0.4),
+        new Vector2D(cx + s*0.2, cy + s*0.4),
+        new Vector2D(cx,         cy + s*0.1),
+        new Vector2D(cx - s*0.2, cy + s*0.4),
+        new Vector2D(cx - s*0.4, cy + s*0.4),
+        new Vector2D(cx - s*0.1, cy - s*0.1),
+        new Vector2D(cx - s*0.1, cy - s*0.4)
+      ];
+      return pts[idx];
+    };
+
+    const cxCD = -60, cyCD = -60;
+    const R_out = 40, R_in = 20;
+    const dTheta = 0.05;
+
+    const N_half = 16;
+    for (let i = 0; i <= N_half; i++) {
+      const angle = (Math.PI + dTheta) + (Math.PI - 2 * dTheta) * (i / N_half);
+      points.push(new Vector2D(cxCD + Math.cos(angle) * R_out, cyCD + Math.sin(angle) * R_out));
+    }
+
+    points.push(new Vector2D(-20, -61));
+    points.push(new Vector2D(50, -61));
+
+    points.push(getYShapePt(7));
+    points.push(getYShapePt(8));
+    points.push(getYShapePt(0));
+    points.push(getYShapePt(1));
+    points.push(getYShapePt(2));
+    points.push(getYShapePt(3));
+    points.push(getYShapePt(4));
+    points.push(getYShapePt(5));
+    points.push(getYShapePt(6));
+
+    points.push(new Vector2D(20, -20));
+    points.push(new Vector2D(30, 30));
+
+    points.push(getSqDonutPt(2));
+    points.push(getSqDonutPt(3));
+    points.push(getSqDonutPt(4));
+    points.push(getSqDonutPt(5));
+    points.push(getSqDonutPt(6));
+    points.push(getSqDonutPt(7));
+    points.push(getSqDonutPt(8));
+    points.push(getSqDonutPt(9));
+    points.push(getSqDonutPt(10));
+    points.push(getSqDonutPt(11));
+    points.push(getSqDonutPt(0));
+    points.push(getSqDonutPt(1));
+
+    points.push(new Vector2D(30, 61));
+    points.push(new Vector2D(-30, 61));
+
+    points.push(getCrossPt(4));
+    points.push(getCrossPt(5));
+    points.push(getCrossPt(6));
+    points.push(getCrossPt(7));
+    points.push(getCrossPt(8));
+    points.push(getCrossPt(9));
+    points.push(getCrossPt(10));
+    points.push(getCrossPt(11));
+    points.push(getCrossPt(0));
+    points.push(getCrossPt(1));
+    points.push(getCrossPt(2));
+    points.push(getCrossPt(3));
+
+    points.push(new Vector2D(-30, 59));
+    points.push(new Vector2D(-20, -59));
+
+    for (let i = 0; i <= N_half; i++) {
+      const angle = (2 * Math.PI + dTheta) + (Math.PI - 2 * dTheta) * (i / N_half);
+      points.push(new Vector2D(cxCD + Math.cos(angle) * R_out, cyCD + Math.sin(angle) * R_out));
+    }
+
+    points.push(new Vector2D(cxCD + Math.cos(3 * Math.PI - dTheta) * R_in, cyCD + Math.sin(3 * Math.PI - dTheta) * R_in));
+
+    const N_full = 32;
+    for (let i = 0; i <= N_full; i++) {
+      const angle = (3 * Math.PI - dTheta) - (Math.PI * 2 - 2 * dTheta) * (i / N_full);
+      points.push(new Vector2D(cxCD + Math.cos(angle) * R_in, cyCD + Math.sin(angle) * R_in));
+    }
+
+    points.push(new Vector2D(cxCD + Math.cos(Math.PI + dTheta) * R_out, cyCD + Math.sin(Math.PI + dTheta) * R_out));
+
+    return points;
   }
 };
 
