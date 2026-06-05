@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { MedialAxisTransform } from './medialAxis.js';
 import { Vector2D } from './utils/vector2d.js';
 import { distanceToPolygon, closestPointOnSegment, pointInPolygon, mergePolygonCells } from './utils/geometry.js';
@@ -13,14 +14,14 @@ const state = {
   samplesPerEdge: 25,
   precision: 1e-5,
   showSkeleton: true,
-  simplifySkeleton: false,
+  simplifySkeleton: true,
   mergeThreshold: 2.0, // Default in meters
-  pruneBranches: false,
-  showRibs: false,
-  ribSpacing: 5.0, // Default in meters
-  showBays: false,
+  pruneBranches: true,
+  showRibs: true,
+  ribSpacing: 10.0, // Default in meters
+  showBays: true,
   structuralBays: [],
-  editBaysMode: false,
+  editBaysMode: true,
   selectedBayIndices: [],
   bayEdits: [], // Array of { type: 'delete'|'merge', points: Vector2D[] }
   graphVertexOverrides: new Map(),
@@ -29,11 +30,14 @@ const state = {
   draggedGraphEdgeIdx: -1,
   dragStartMousePos: null,
   planarGraph: null,
-  hoverCircle: true,
-  showGovernors: true,
+  hoverCircle: false,
+  showGovernors: false,
   isDrawing: false,
   customVertices: [],
   draggedVertexIdx: -1,
+  selectedVertexType: null, // 'polygon' or 'graph' or null
+  selectedVertexIdx: -1,
+  selectedVertexOrig: null,
   hoveredMedialPoint: null,
   skeletonData: { regularPoints: [], junctionPoints: [], simplifiedSegments: [], simplifiedNodes: [] },
   computeTime: 0,
@@ -53,6 +57,8 @@ let controls;
 let meshesGroup; // Group to hold all dynamic geometric meshes
 let rhinoGroup;
 let rhinoManager;
+let transformControls;
+let manipulatorTarget;
 
 const appContext = {
   state,
@@ -150,7 +156,47 @@ function initThree() {
   rhinoManager = new RhinoManager(appContext);
   window.rhinoManager = rhinoManager;
 
-  // 9. Resize Canvas
+  // 9. TransformControls Move Manipulator
+  manipulatorTarget = new THREE.Object3D();
+  scene.add(manipulatorTarget);
+
+  transformControls = new TransformControls(cameraActive, renderer.domElement);
+  transformControls.setMode('translate');
+  transformControls.showZ = false; // Disable Z axis control
+  scene.add(transformControls.getHelper());
+
+  // Hook OrbitControls toggle during dragging
+  transformControls.addEventListener('dragging-changed', (event) => {
+    controls.enabled = !event.value;
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    if (event.value) {
+      if (statusDot) statusDot.classList.add('loading');
+      if (statusText) statusText.innerText = "Moving vertex via manipulator...";
+    } else {
+      if (statusDot) statusDot.classList.remove('loading');
+      if (statusText) statusText.innerText = `Computed ${state.skeletonData.regularPoints.length + state.skeletonData.junctionPoints.length} medial points successfully.`;
+    }
+  });
+
+  // Handle position changes on drag
+  transformControls.addEventListener('change', () => {
+    if (transformControls.dragging && transformControls.object) {
+      const pos = transformControls.object.position;
+      if (state.selectedVertexType === 'polygon' && state.selectedVertexIdx !== undefined && state.selectedVertexIdx !== -1) {
+        state.polygon[state.selectedVertexIdx] = new Vector2D(pos.x, pos.y);
+        recomputeMAT();
+      } else if (state.selectedVertexType === 'graph' && state.selectedVertexOrig) {
+        state.graphVertexOverrides.set(
+          `${state.selectedVertexOrig.x.toFixed(4)},${state.selectedVertexOrig.y.toFixed(4)}`,
+          new Vector2D(pos.x, pos.y)
+        );
+        recomputeMAT();
+      }
+    }
+  });
+
+  // 10. Resize Canvas
   window.addEventListener('resize', resizeCanvas);
   
   // 10. Start high-performance render loop
@@ -232,6 +278,9 @@ function setCameraView(type) {
   }
   controls.update();
   updateCameraHUD();
+  if (transformControls) {
+    transformControls.camera = cameraActive;
+  }
 }
 
 // Auto-fit shape to viewport with 30% boundary padding
@@ -309,6 +358,12 @@ function loadPreset(name) {
   state.graphVertexOverrides.clear();
   state.bayEdits = [];
   state.selectedBayIndices = [];
+  if (transformControls) {
+    transformControls.detach();
+  }
+  state.selectedVertexType = null;
+  state.selectedVertexIdx = -1;
+  state.selectedVertexOrig = null;
   
   const rect = wrapper.getBoundingClientRect();
   const w = Math.max(800, rect.width - 40);
@@ -1047,6 +1102,31 @@ function computeAcceptedRibs() {
 function draw() {
   if (!meshesGroup) return;
 
+  // Sync selected vertex index for planar graph if selection is graph-based
+  if (state.selectedVertexType === 'graph' && state.selectedVertexOrig && state.planarGraph) {
+    const orig = state.selectedVertexOrig;
+    let foundIdx = -1;
+    let minDist = Infinity;
+    for (let i = 0; i < state.planarGraph.vertices.length; i++) {
+      const origV = state.planarGraph.originalVertices[i];
+      if (origV) {
+        const d = Math.hypot(orig.x - origV.x, orig.y - origV.y);
+        if (d < 0.1 && d < minDist) {
+          minDist = d;
+          foundIdx = i;
+        }
+      }
+    }
+    if (foundIdx !== -1) {
+      state.selectedVertexIdx = foundIdx;
+    } else {
+      if (transformControls) transformControls.detach();
+      state.selectedVertexType = null;
+      state.selectedVertexIdx = -1;
+      state.selectedVertexOrig = null;
+    }
+  }
+
   // 1. Clear previous dynamic 3D meshes
   while (meshesGroup.children.length > 0) {
     const child = meshesGroup.children[0];
@@ -1426,8 +1506,9 @@ function draw() {
 
     for (let i = 0; i < state.polygon.length; i++) {
       const v = state.polygon[i];
+      const isSelected = (state.selectedVertexType === 'polygon' && state.selectedVertexIdx === i);
       const handleMat = new THREE.MeshBasicMaterial({
-        color: 0x374151, // Dark Slate Grey
+        color: isSelected ? 0x10b981 : 0x374151, // Green if selected, Slate Grey otherwise
       });
 
       const handle = new THREE.Mesh(handleGeom, handleMat);
@@ -1475,8 +1556,9 @@ function draw() {
     const innerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
 
     state.planarGraph.vertices.forEach((v, i) => {
+      const isSelected = (state.selectedVertexType === 'graph' && state.selectedVertexIdx === i);
       const vertexMat = new THREE.MeshBasicMaterial({
-        color: 0x4f46e5, // Elegant indigo matching edges
+        color: isSelected ? 0x10b981 : 0x4f46e5, // Green if selected, Indigo otherwise
         transparent: true,
         opacity: 0.95
       });
@@ -1491,6 +1573,23 @@ function draw() {
       innerMesh.position.set(v.x, v.y, 0.039);
       meshesGroup.add(innerMesh);
     });
+  }
+
+  // Update manipulator target position to match selection
+  if (transformControls && transformControls.object) {
+    if (state.selectedVertexType === 'polygon' && state.selectedVertexIdx !== -1 && state.polygon[state.selectedVertexIdx]) {
+      const v = state.polygon[state.selectedVertexIdx];
+      manipulatorTarget.position.set(v.x, v.y, 0.03);
+    } else if (state.selectedVertexType === 'graph' && state.selectedVertexIdx !== -1 && state.planarGraph && state.planarGraph.vertices[state.selectedVertexIdx]) {
+      const v = state.planarGraph.vertices[state.selectedVertexIdx];
+      manipulatorTarget.position.set(v.x, v.y, 0.035);
+    } else {
+      // Detach if selection is no longer valid
+      transformControls.detach();
+      state.selectedVertexType = null;
+      state.selectedVertexIdx = -1;
+      state.selectedVertexOrig = null;
+    }
   }
 }
 
@@ -1655,12 +1754,20 @@ function setupEventListeners() {
       const actions = document.getElementById('edit-bays-actions');
       if (actions) actions.style.display = 'none';
     }
+    if (transformControls) transformControls.detach();
+    state.selectedVertexType = null;
+    state.selectedVertexIdx = -1;
+    state.selectedVertexOrig = null;
     draw();
   });
 
   document.getElementById('chk-edit-bays-mode').addEventListener('change', (e) => {
     state.editBaysMode = e.target.checked;
     state.selectedBayIndices = [];
+    if (transformControls) transformControls.detach();
+    state.selectedVertexType = null;
+    state.selectedVertexIdx = -1;
+    state.selectedVertexOrig = null;
     
     const actions = document.getElementById('edit-bays-actions');
     if (actions) {
@@ -1676,6 +1783,10 @@ function setupEventListeners() {
       const points = state.selectedBayIndices.map(idx => getCentroid(state.structuralBays[idx]));
       state.bayEdits.push({ type: 'merge', points });
       state.selectedBayIndices = [];
+      if (transformControls) transformControls.detach();
+      state.selectedVertexType = null;
+      state.selectedVertexIdx = -1;
+      state.selectedVertexOrig = null;
       updateBaySelectionUI();
       recomputeMAT();
     }
@@ -1687,6 +1798,10 @@ function setupEventListeners() {
         state.bayEdits.push({ type: 'delete', point: getCentroid(state.structuralBays[idx]) });
       });
       state.selectedBayIndices = [];
+      if (transformControls) transformControls.detach();
+      state.selectedVertexType = null;
+      state.selectedVertexIdx = -1;
+      state.selectedVertexOrig = null;
       updateBaySelectionUI();
       recomputeMAT();
     }
@@ -1707,6 +1822,10 @@ function setupEventListeners() {
     state.bayEdits = [];
     state.graphVertexOverrides.clear();
     state.selectedBayIndices = [];
+    if (transformControls) transformControls.detach();
+    state.selectedVertexType = null;
+    state.selectedVertexIdx = -1;
+    state.selectedVertexOrig = null;
     updateBaySelectionUI();
     recomputeMAT();
   });
@@ -1734,6 +1853,10 @@ function setupEventListeners() {
     state.bayEdits = [];
     state.selectedBayIndices = [];
     state.skeletonData = { regularPoints: [], junctionPoints: [] };
+    if (transformControls) transformControls.detach();
+    state.selectedVertexType = null;
+    state.selectedVertexIdx = -1;
+    state.selectedVertexOrig = null;
     
     btnDrawCustom.style.display = 'none';
     btnClearCustom.style.display = 'inline-flex';
@@ -1751,6 +1874,10 @@ function setupEventListeners() {
     state.polygon = [];
     state.isDrawing = true;
     state.skeletonData = { regularPoints: [], junctionPoints: [] };
+    if (transformControls) transformControls.detach();
+    state.selectedVertexType = null;
+    state.selectedVertexIdx = -1;
+    state.selectedVertexOrig = null;
     draw();
   });
 
@@ -1924,6 +2051,11 @@ function handleMouseDown(e) {
   if (e.button === 1 || e.button === 2) return;
 
   if (e.button === 0) {
+    // If the click is on the translator handles, let TransformControls handle it
+    if (transformControls && (transformControls.dragging || transformControls.axis)) {
+      return;
+    }
+
     if (state.editBaysMode) {
       const target = getIntersectionPoint(e);
       const worldPos = new Vector2D(target.x, target.y);
@@ -1940,12 +2072,17 @@ function handleMouseDown(e) {
       for (const hit of intersects) {
         if (hit.object.userData && hit.object.userData.isGraphVertex) {
           const idx = hit.object.userData.index;
-          state.draggedGraphVertexOrig = state.planarGraph.originalVertices[idx];
-          state.draggedGraphVertexIdx = idx;
-          controls.enabled = false;
-          document.getElementById('status-dot').classList.add('loading');
-          document.getElementById('status-text').innerText = `Dragging graph vertex...`;
+          const v = state.planarGraph.vertices[idx];
+          
+          state.selectedVertexType = 'graph';
+          state.selectedVertexIdx = idx;
+          state.selectedVertexOrig = state.planarGraph.originalVertices[idx];
+          
+          manipulatorTarget.position.set(v.x, v.y, 0.035);
+          transformControls.attach(manipulatorTarget);
+          
           clickedGraphObject = true;
+          draw();
           break;
         }
       }
@@ -1964,9 +2101,14 @@ function handleMouseDown(e) {
           const btnDelete = document.getElementById('btn-delete-bays');
           if (btnCombine) btnCombine.disabled = state.selectedBayIndices.length < 2;
           if (btnDelete) btnDelete.disabled = state.selectedBayIndices.length === 0;
-
-          draw();
         }
+        
+        // Clicked a bay or empty space: detach manipulator & reset selection state
+        transformControls.detach();
+        state.selectedVertexType = null;
+        state.selectedVertexIdx = -1;
+        state.selectedVertexOrig = null;
+        draw();
       }
       return; // Prevent vertex dragging/drawing while editing bays
     }
@@ -1982,13 +2124,29 @@ function handleMouseDown(e) {
 
     for (const hit of intersects) {
       if (hit.object.userData && hit.object.userData.isHandle) {
-        state.draggedVertexIdx = hit.object.userData.index;
-        controls.enabled = false; // Disable camera orbiting while dragging!
-        document.getElementById('status-dot').classList.add('loading');
-        document.getElementById('status-text').innerText = `Dragging vertex ${state.draggedVertexIdx}...`;
+        const idx = hit.object.userData.index;
+        const v = state.polygon[idx];
+        
+        state.selectedVertexType = 'polygon';
+        state.selectedVertexIdx = idx;
+        state.selectedVertexOrig = null;
+        
+        manipulatorTarget.position.set(v.x, v.y, 0.03);
+        transformControls.attach(manipulatorTarget);
+        
         clickedHandle = true;
+        draw();
         break;
       }
+    }
+
+    if (!clickedHandle && !state.isDrawing) {
+      // Clicked empty space in normal mode
+      transformControls.detach();
+      state.selectedVertexType = null;
+      state.selectedVertexIdx = -1;
+      state.selectedVertexOrig = null;
+      draw();
     }
 
     if (state.isDrawing) {
@@ -2023,15 +2181,7 @@ function handleMouseMove(e) {
   const worldPos = new Vector2D(target.x, target.y);
   state.mouseWorldPos = worldPos;
 
-  if (state.draggedGraphVertexOrig && state.planarGraph) {
-    const origPt = state.draggedGraphVertexOrig;
-    state.graphVertexOverrides.set(`${origPt.x.toFixed(4)},${origPt.y.toFixed(4)}`, worldPos);
-    recomputeMAT();
-  } else if (state.draggedVertexIdx !== -1) {
-    // Drag handle: Update vertex position in world coordinates
-    state.polygon[state.draggedVertexIdx] = worldPos;
-    recomputeMAT();
-  } else if (state.isDrawing) {
+  if (state.isDrawing) {
     draw();
   } else if (state.hoverCircle && !state.editBaysMode && state.polygon.length >= 3 && controls.state === -1) {
     // Hover logic: Find closest medial point (measured in screen space distance)
@@ -2068,36 +2218,12 @@ function handleMouseMove(e) {
 }
 
 function handleMouseUp() {
-  if (state.draggedGraphVertexOrig || state.draggedGraphVertexIdx !== -1) {
-    state.draggedGraphVertexOrig = null;
-    state.draggedGraphVertexIdx = -1;
-    controls.enabled = true;
-    document.getElementById('status-dot').classList.remove('loading');
-    recomputeMAT();
-  } else if (state.draggedVertexIdx !== -1) {
-    state.draggedVertexIdx = -1;
-    controls.enabled = true; // Re-enable camera rotation
-    document.getElementById('status-dot').classList.remove('loading');
-    recomputeMAT();
-  }
+  // Dragging is handled by TransformControls dragging-changed listener.
 }
 
 function handleMouseLeave() {
   state.mouseWorldPos = null;
   state.hoveredMedialPoint = null;
-  if (state.draggedGraphVertexOrig || state.draggedGraphVertexIdx !== -1) {
-    state.draggedGraphVertexOrig = null;
-    state.draggedGraphVertexIdx = -1;
-    controls.enabled = true;
-    document.getElementById('status-dot').classList.remove('loading');
-    recomputeMAT();
-  }
-  if (state.draggedVertexIdx !== -1) {
-    state.draggedVertexIdx = -1;
-    controls.enabled = true;
-    document.getElementById('status-dot').classList.remove('loading');
-    recomputeMAT();
-  }
   draw();
 }
 

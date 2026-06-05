@@ -138,11 +138,11 @@ h1 {
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  cursor: grab;
+  cursor: default;
 }
 
 .canvas-wrapper:active {
-  cursor: grabbing;
+  cursor: default;
 }
 
 canvas {

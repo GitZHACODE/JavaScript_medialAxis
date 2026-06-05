@@ -9,22 +9,6 @@
 </head>
 <body>
 
-  <!-- Header -->
-  <header>
-    <div class="logo">
-      <div class="logo-icon"></div>
-      <h1>Medial Axis Transform</h1>
-    </div>
-    <div class="header-actions">
-      <button class="btn btn-primary" id="btn-draw-custom">
-        <span class="hud-tips-icon">✍</span> Draw Custom Polygon
-      </button>
-      <button class="btn" id="btn-clear-custom" style="display: none;">
-        <span>🗑</span> Clear Drawing
-      </button>
-    </div>
-  </header>
-
   <!-- App Body Container -->
   <div class="app-container">
     <!-- Drawing Mode Indicator -->
@@ -93,6 +77,12 @@
               <span class="preset-name">Custom</span>
             </div>
           </div>
+          <button class="btn" id="btn-draw-custom" style="width: 100%; margin-top: 12px; justify-content: center;">
+            Draw Custom Polygon
+          </button>
+          <button class="btn" id="btn-clear-custom" style="display: none; width: 100%; margin-top: 12px; justify-content: center; color: #ef4444; border-color: rgba(239, 68, 68, 0.2); background: rgba(239, 68, 68, 0.05);">
+            Clear Custom Polygon
+          </button>
         </section>
 
         <!-- Tracing Parameters -->
@@ -146,10 +136,10 @@
               <span class="toggle-label">Simplify Medial Axis</span>
               <span class="toggle-sub">Straighten branches (valence 3 to valence 1)</span>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="chk-simplify-skeleton">
-              <span class="slider-switch"></span>
-            </label>
+             <label class="switch">
+               <input type="checkbox" id="chk-simplify-skeleton" checked>
+               <span class="slider-switch"></span>
+             </label>
           </div>
 
           <!-- Merge Nodes Slider -->
@@ -174,7 +164,7 @@
             </div>
             <div style="display: flex; align-items: center; gap: 10px;">
               <label class="switch">
-                <input type="checkbox" id="chk-show-ribs">
+                <input type="checkbox" id="chk-show-ribs" checked>
                 <span class="slider-switch"></span>
               </label>
               <button class="btn-collapse-arrow" id="btn-collapse-ribs-workflow" aria-label="Collapse workflow" style="background: none; border: none; padding: 4px; cursor: pointer; color: var(--text-muted); font-size: 0.85rem; display: flex; align-items: center; justify-content: center; transition: transform 0.2s ease; outline: none; margin-left: 2px;">
@@ -193,7 +183,7 @@
                 <span class="toggle-sub" style="font-size: 0.7rem;">Deletes edges connecting corners to internal nodes</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="chk-prune-branches">
+                <input type="checkbox" id="chk-prune-branches" checked>
                 <span class="slider-switch"></span>
               </label>
             </div>
@@ -202,9 +192,9 @@
             <div class="slider-container" id="container-ribs-slider" style="margin-top: 10px; margin-bottom: 10px;">
               <div class="slider-info">
                 <span class="slider-label" style="font-size: 0.82rem;">Rib Spacing (m)</span>
-                <span class="slider-value" id="val-ribs" style="font-size: 0.82rem;">5.0m</span>
+                <span class="slider-value" id="val-ribs" style="font-size: 0.82rem;">10.0m</span>
               </div>
-              <input type="range" id="slider-ribs" min="1" max="25" step="0.5" value="5">
+              <input type="range" id="slider-ribs" min="1" max="25" step="0.5" value="10">
             </div>
 
             <!-- Step 4: Show Structural Bays -->
@@ -214,24 +204,24 @@
                 <span class="toggle-sub" style="font-size: 0.7rem;">Draws enclosed cells as structural spaces</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="chk-show-bays">
+                <input type="checkbox" id="chk-show-bays" checked>
                 <span class="slider-switch"></span>
               </label>
             </div>
 
-            <!-- Edit Bays Sub-panel (hidden by default) -->
-            <div id="container-edit-bays" style="display: none; margin-top: 10px; margin-bottom: 10px; border: 1px dashed var(--border-color); padding: 12px; background: rgba(0,0,0,0.02);">
+            <!-- Edit Bays Sub-panel (visible by default since Show Bays is checked) -->
+            <div id="container-edit-bays" style="display: block; margin-top: 10px; margin-bottom: 10px; border: 1px dashed var(--border-color); padding: 12px; background: rgba(0,0,0,0.02);">
               <div class="toggle-container" style="border: none; padding: 0 0 10px 0; background: transparent; cursor: default;">
                 <div class="toggle-details">
-                  <span class="toggle-label" style="font-size: 0.82rem; font-weight: 600;">Edit Bays Mode</span>
-                  <span class="toggle-sub" style="font-size: 0.7rem;">Click cells in viewport to select them</span>
+                   <span class="toggle-label" style="font-size: 0.82rem; font-weight: 600;">Edit Bays Mode</span>
+                   <span class="toggle-sub" style="font-size: 0.7rem;">Click cells in viewport to select them</span>
                 </div>
                 <label class="switch">
-                  <input type="checkbox" id="chk-edit-bays-mode">
+                  <input type="checkbox" id="chk-edit-bays-mode" checked>
                   <span class="slider-switch"></span>
                 </label>
               </div>
-              <div id="edit-bays-actions" style="display: none; grid-template-columns: 1fr; gap: 8px; margin-top: 8px;">
+              <div id="edit-bays-actions" style="display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 8px;">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
                   <button class="btn" id="btn-combine-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center;" disabled>Combine</button>
                   <button class="btn" id="btn-delete-bays" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; color: #ef4444; border-color: rgba(239, 68, 68, 0.2);" disabled>Delete</button>
@@ -257,7 +247,7 @@
                 <span class="toggle-sub">Hover near axis to see maximal inscribed discs</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="chk-hover-circle" checked>
+                <input type="checkbox" id="chk-hover-circle">
                 <span class="slider-switch"></span>
               </label>
             </div>
@@ -269,7 +259,7 @@
                 <span class="toggle-sub">Draw vectors linking center to tangency points</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="chk-show-governors" checked>
+                <input type="checkbox" id="chk-show-governors">
                 <span class="slider-switch"></span>
               </label>
             </div>
