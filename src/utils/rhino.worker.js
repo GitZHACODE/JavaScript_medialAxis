@@ -598,11 +598,14 @@ function createRoofSheetMesh(rhino, structuralBays, cantileverCells, zTop, RH, i
     };
 
     const getVertexHeight = (v) => {
+        if (isConcrete) {
+            return zTop + RH;
+        }
         const isInterior = isInteriorSkeletonPointWorker(v, boundary);
         if (isInterior) {
-            return isConcrete ? zTop : (zTop - RH);
+            return zTop - RH;
         } else {
-            return isConcrete ? (zTop + RH) : zTop;
+            return zTop;
         }
     };
 
@@ -1316,6 +1319,20 @@ self.onmessage = async function(e) {
             const vaultsLayerIdx = doc.layers().count - 1;
             layer3DVaults.delete();
 
+            const layer3DGraph = new rhino.Layer();
+            layer3DGraph.name = "3D_Structural_Graph";
+            layer3DGraph.color = { r: 239, g: 68, b: 68, a: 255 }; // Red: #ef4444
+            doc.layers().add(layer3DGraph);
+            const graph3DLayerIdx = doc.layers().count - 1;
+            layer3DGraph.delete();
+
+            const layer3DCellOutlines = new rhino.Layer();
+            layer3DCellOutlines.name = "3D_Cell_Outlines";
+            layer3DCellOutlines.color = { r: 99, g: 102, b: 241, a: 255 }; // Indigo: #6366f1
+            doc.layers().add(layer3DCellOutlines);
+            const cellOutlines3DLayerIdx = doc.layers().count - 1;
+            layer3DCellOutlines.delete();
+
 
 
             // 3D Cells Layers
@@ -1384,6 +1401,8 @@ self.onmessage = async function(e) {
                 const bays = poly.bays;
                 const planarGraphVertices = poly.planarGraphVertices;
                 const planarGraphEdges = poly.planarGraphEdges;
+                const planarGraph3D = poly.planarGraph3D;
+                const structuralBays3D = poly.structuralBays3D;
                 const hasScaffold = poly.hasScaffold !== false;
                 const segmentContexts = poly.segmentContexts || [];
                 const cellIsCorner = poly.cellIsCorner || [];
@@ -2074,6 +2093,63 @@ self.onmessage = async function(e) {
                             }
                         });
                     }
+                }
+
+                // G. Add 3D Structural Graph
+                if (planarGraph3D && planarGraph3D.vertices && planarGraph3D.vertices.length > 0) {
+                    const attr = new rhino.ObjectAttributes();
+                    attr.layerIndex = graph3DLayerIdx;
+                    
+                    planarGraph3D.edges.forEach((edge, idx) => {
+                        attr.name = `Graph_Edge_P${polyIdx}_${idx}`;
+                        const uPt = planarGraph3D.vertices[edge.u];
+                        const vPt = planarGraph3D.vertices[edge.v];
+                        if (uPt && vPt) {
+                            doc.objects().addLine(
+                                [uPt.x, uPt.y, uPt.z],
+                                [vPt.x, vPt.y, vPt.z],
+                                attr
+                            );
+                        }
+                    });
+                    attr.delete();
+                }
+
+                // H. Add 3D Cell Outlines
+                if (structuralBays3D && structuralBays3D.length > 0) {
+                    const attr = new rhino.ObjectAttributes();
+                    attr.layerIndex = cellOutlines3DLayerIdx;
+                    
+                    structuralBays3D.forEach((cell3d, cellIdx) => {
+                        // 1. Bottom outline
+                        attr.name = `Cell_Bottom_Outline_P${polyIdx}_C${cellIdx}_F${cell3d.floorIndex}`;
+                        const plBot = new rhino.Polyline(cell3d.vertices.length + 1);
+                        cell3d.vertices.forEach(v => plBot.add(v.x, v.y, v.z));
+                        plBot.add(cell3d.vertices[0].x, cell3d.vertices[0].y, cell3d.vertices[0].z);
+                        doc.objects().addPolyline(plBot, attr);
+                        plBot.delete();
+
+                        // 2. Top outline
+                        attr.name = `Cell_Top_Outline_P${polyIdx}_C${cellIdx}_F${cell3d.floorIndex}`;
+                        const plTop = new rhino.Polyline(cell3d.topVertices.length + 1);
+                        cell3d.topVertices.forEach(v => plTop.add(v.x, v.y, v.z));
+                        plTop.add(cell3d.topVertices[0].x, cell3d.topVertices[0].y, cell3d.topVertices[0].z);
+                        doc.objects().addPolyline(plTop, attr);
+                        plTop.delete();
+
+                        // 3. Vertical edges
+                        for (let k = 0; k < cell3d.vertices.length; k++) {
+                            attr.name = `Cell_Vertical_Edge_P${polyIdx}_C${cellIdx}_F${cell3d.floorIndex}_V${k}`;
+                            const vB = cell3d.vertices[k];
+                            const vT = cell3d.topVertices[k];
+                            doc.objects().addLine(
+                                [vB.x, vB.y, vB.z],
+                                [vT.x, vT.y, vT.z],
+                                attr
+                            );
+                        }
+                    });
+                    attr.delete();
                 }
             });
 

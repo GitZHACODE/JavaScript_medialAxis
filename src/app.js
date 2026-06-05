@@ -2232,11 +2232,14 @@ function createRoofSheetGeometry(structuralBays, cantileverCells, zTop, RH, isCo
   };
 
   const getVertexHeight = (v) => {
+    if (isConcrete) {
+      return zTop + RH;
+    }
     const isInterior = isInteriorSkeletonPoint(v, state.polygon);
     if (isInterior) {
-      return isConcrete ? zTop : (zTop - RH);
+      return zTop - RH;
     } else {
-      return isConcrete ? (zTop + RH) : zTop;
+      return zTop;
     }
   };
 
@@ -3484,6 +3487,31 @@ function build3DStack() {
           stack3DGroup.add(vertLine);
         }
       });
+
+      // Render 3D Structural Graph
+      if (item.planarGraph3D && item.planarGraph3D.vertices && item.planarGraph3D.vertices.length > 0) {
+        const linePositions = [];
+        const graphVerts = item.planarGraph3D.vertices;
+        item.planarGraph3D.edges.forEach(edge => {
+          const uPt = graphVerts[edge.u];
+          const vPt = graphVerts[edge.v];
+          if (uPt && vPt) {
+            linePositions.push(uPt.x, uPt.y, uPt.z);
+            linePositions.push(vPt.x, vPt.y, vPt.z);
+          }
+        });
+        const graphGeom = new THREE.BufferGeometry();
+        graphGeom.setAttribute('position', new THREE.Float32BufferAttribute(linePositions, 3));
+        const graphMat = new THREE.LineBasicMaterial({
+          color: 0xef4444, // Red: #ef4444
+          linewidth: 2,
+          transparent: true,
+          opacity: 0.8
+        });
+        const graphLines = new THREE.LineSegments(graphGeom, graphMat);
+        graphLines.userData = { is3DStackMesh: true, polygonId: item.id };
+        stack3DGroup.add(graphLines);
+      }
     }
   });
 

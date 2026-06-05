@@ -353,7 +353,9 @@ export class RhinoManager {
                 planarGraphEdges: item.planarGraph ? item.planarGraph.edges.map(e => [e[0], e[1]]) : null,
                 segmentContexts,
                 cellIsCorner,
-                boundaryNormals: boundaryNormals.map(n => [n.x, n.y, 0.0])
+                boundaryNormals: boundaryNormals.map(n => [n.x, n.y, 0.0]),
+                planarGraph3D: item.planarGraph3D,
+                structuralBays3D: item.structuralBays3D
             };
         });
         
