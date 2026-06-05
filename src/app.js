@@ -47,6 +47,8 @@ const state = {
   mouseWorldPos: null,
   numFloors: 3,
   floorHeight: 4.0,
+  showGroup3DGeometry: true,
+  showGroupCellsInteraction: true,
   show3DColumns: true,
   show3DBeams: true,
   showFloorSlabs: true,
@@ -2782,6 +2784,14 @@ function build3DStack() {
   const floorHeight = state.floorHeight;
   const bipartiteData = computeBipartiteVertexHeights(state.structuralBays);
 
+  const effectiveShowColumns = state.showGroup3DGeometry && state.show3DColumns;
+  const effectiveShowBeams = state.showGroup3DGeometry && state.show3DBeams;
+  const effectiveShowFloorSlabs = state.showGroup3DGeometry && state.showFloorSlabs;
+  const effectiveShowRoofSlab = state.showGroup3DGeometry && state.showRoofSlab;
+  const effectiveShowVaultedRoofs = state.showGroup3DGeometry && state.showVaultedRoofs;
+  const effectiveShowBriseSoleil = state.showGroup3DGeometry && state.showBriseSoleil;
+  const effectiveShowCells = state.showGroupCellsInteraction && state.show3DCells;
+
   // Materials
   const concreteMat = new THREE.MeshStandardMaterial({ color: 0x78716c, roughness: 0.8, metalness: 0.1 });
   const concreteMatDouble = new THREE.MeshStandardMaterial({ color: 0x78716c, roughness: 0.8, metalness: 0.1, side: THREE.DoubleSide });
@@ -3090,7 +3100,7 @@ function build3DStack() {
       });
 
       // 1. Floor Slabs
-      if (state.showFloorSlabs) {
+      if (effectiveShowFloorSlabs) {
         // Vaulted floor slab at the bottom of the floor
         if (i > 0) {
           state.structuralBays.forEach((cell, cellIdx) => {
@@ -3120,7 +3130,7 @@ function build3DStack() {
       }
 
       // Flat cantilevered roof slab at the top of the topmost floor (split into concrete top / timber bottom)
-      if (state.showRoofSlab && isRoofFloor) {
+      if (effectiveShowRoofSlab && isRoofFloor) {
         if (floorPolygon && floorPolygon.length >= 3) {
           const cantileveredPoly = [];
           for (let j = 0; j < floorPolygon.length; j++) {
@@ -3183,7 +3193,7 @@ function build3DStack() {
       }
 
       // Hypar ceilings under the roof (Roof floor only, inside unpruned structural bays)
-      if (state.showVaultedRoofs && isRoofFloor) {
+      if (effectiveShowVaultedRoofs && isRoofFloor) {
         if (floorPolygon && floorPolygon.length >= 3) {
           const warpedBays = (state.unprunedStructuralBays || []).map(cell => getWarpedCell(cell, state.polygon, floorPolygon));
           const bipartiteData = computeBipartiteVertexHeights(state.unprunedStructuralBays || []);
@@ -3208,7 +3218,7 @@ function build3DStack() {
       }
 
       // 2. Columns
-      if (state.show3DColumns) {
+      if (effectiveShowColumns) {
         let slabThick = state.slabThickness;
         if (isGroundFloor) slabThick = state.slabThickness * 1.5;
         else if (isRoofFloor) slabThick = state.slabThickness * 0.8;
@@ -3320,7 +3330,7 @@ function build3DStack() {
       }
 
       // 3. Beams
-      if (state.show3DBeams && i >= 1) {
+      if (effectiveShowBeams && i >= 1) {
         let tapFactor = 1.0;
         if (numFloors > 1) {
           tapFactor = 1.3 - 0.5 * (i / (numFloors - 1));
@@ -3414,7 +3424,7 @@ function build3DStack() {
 
 
       // 5. Brise-Soleil (extend to all floors from roof to ground, on south and west sides, Timber group)
-      if (state.showBriseSoleil) {
+      if (effectiveShowBriseSoleil) {
         const sunDir = new Vector2D(-0.707, -0.707); // Southwest Sun Vector
 
         for (let j = 0; j < floorPolygon.length; j++) {
@@ -3477,7 +3487,7 @@ function build3DStack() {
 
 
     // 7. 3D Cell Volumes (colored by classification)
-    if (state.show3DCells && item.structuralBays3D && item.structuralBays3D.length > 0) {
+    if (effectiveShowCells && item.structuralBays3D && item.structuralBays3D.length > 0) {
       item.structuralBays3D.forEach(cell3d => {
         const cellShape = new THREE.Shape();
         cellShape.moveTo(cell3d.vertices[0].x, cell3d.vertices[0].y);
@@ -4067,6 +4077,35 @@ function setupRhinoUIControls() {
     });
   }
 
+  // Group Toggles
+  const chkGroup3D = document.getElementById('chk-group-3d-geometry');
+  const divDrilldown3D = document.getElementById('group-3d-geometry-drilldown');
+  if (chkGroup3D && divDrilldown3D) {
+    chkGroup3D.addEventListener('change', (e) => {
+      state.showGroup3DGeometry = e.target.checked;
+      if (state.showGroup3DGeometry) {
+        divDrilldown3D.classList.add('expanded');
+      } else {
+        divDrilldown3D.classList.remove('expanded');
+      }
+      draw();
+    });
+  }
+
+  const chkGroupCells = document.getElementById('chk-group-cells-interaction');
+  const divDrilldownCells = document.getElementById('group-cells-interaction-drilldown');
+  if (chkGroupCells && divDrilldownCells) {
+    chkGroupCells.addEventListener('change', (e) => {
+      state.showGroupCellsInteraction = e.target.checked;
+      if (state.showGroupCellsInteraction) {
+        divDrilldownCells.classList.add('expanded');
+      } else {
+        divDrilldownCells.classList.remove('expanded');
+      }
+      draw();
+    });
+  }
+
   // Checkboxes
   const chkColumns = document.getElementById('chk-3d-columns');
   if (chkColumns) {
@@ -4600,8 +4639,9 @@ function handleMouseMove(e) {
   const worldPos = new Vector2D(target.x, target.y);
   state.mouseWorldPos = worldPos;
 
-  // 1. Raycast for 3D Cell Phenotype Tooltip Hover
-  if (state.showHoverLabels && state.show3DCells && !state.isDrawing) {
+  const effectiveShowCells = state.showGroupCellsInteraction && state.show3DCells;
+  const effectiveShowLabels = state.showGroupCellsInteraction && state.showHoverLabels;
+  if (effectiveShowLabels && effectiveShowCells && !state.isDrawing) {
     const rect = canvas.getBoundingClientRect();
     mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;

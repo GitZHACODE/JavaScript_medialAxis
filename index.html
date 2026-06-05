@@ -289,105 +289,133 @@
               <input type="range" id="slider-ground-floor-factor" min="1.0" max="4.0" step="0.1" value="2.0">
             </div>
 
-            <!-- Toggle: Show 3D Columns -->
+
+            <!-- Group 1: 3D Elements Toggle -->
             <div class="toggle-container" style="margin-top: 10px;">
               <div class="toggle-details">
-                <span class="toggle-label">Show 3D Columns</span>
-                <span class="toggle-sub">Parametric column cylinders at grid nodes</span>
+                <span class="toggle-label" style="font-weight: 600;">Show 3D Elements</span>
+                <span class="toggle-sub">Toggle overall visibility of all 3D structure types</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="chk-3d-columns" checked>
+                <input type="checkbox" id="chk-group-3d-geometry" checked>
                 <span class="slider-switch"></span>
               </label>
             </div>
 
-            <!-- Toggle: Show 3D Beams -->
+            <!-- Drilldown for 3D Elements -->
+            <div id="group-3d-geometry-drilldown" class="drilldown-container expanded">
+              <!-- Toggle: Show 3D Columns -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show 3D Columns</span>
+                  <span class="toggle-sub">Parametric column cylinders at grid nodes</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-3d-columns" checked>
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
+
+              <!-- Toggle: Show 3D Beams -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show 3D Beams</span>
+                  <span class="toggle-sub">Parametric beam profiles along grid edges</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-3d-beams" checked>
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
+
+              <!-- Toggle: Show Floor Slabs -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show Floor Slabs</span>
+                  <span class="toggle-sub">Solid concrete slab geometries</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-3d-slabs" checked>
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
+
+              <!-- Toggle: Show Roof Slab -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show Roof Slab</span>
+                  <span class="toggle-sub">Composite concrete & timber roof sheets</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-3d-roof" checked>
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
+
+              <!-- Toggle: Show Hypar Ceilings -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show Hypar Ceilings</span>
+                  <span class="toggle-sub">Timber hypar slatted ceilings over top-floor bays</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-3d-vaults" checked>
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
+
+              <!-- Toggle: Show Brise-Soleil -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show Brise-Soleil</span>
+                  <span class="toggle-sub">Solar shading louvers on boundary facades</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-3d-brisesoleil" checked>
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Group 2: Cells & Interaction Toggle -->
             <div class="toggle-container" style="margin-top: 10px;">
               <div class="toggle-details">
-                <span class="toggle-label">Show 3D Beams</span>
-                <span class="toggle-sub">Parametric beam profiles along grid edges</span>
+                <span class="toggle-label" style="font-weight: 600;">Show Cells & Interaction</span>
+                <span class="toggle-sub">Toggle cell volumes and hover label overlays</span>
               </div>
               <label class="switch">
-                <input type="checkbox" id="chk-3d-beams" checked>
+                <input type="checkbox" id="chk-group-cells-interaction" checked>
                 <span class="slider-switch"></span>
               </label>
             </div>
 
-            <!-- Toggle: Show Floor Slabs -->
-            <div class="toggle-container" style="margin-top: 10px;">
-              <div class="toggle-details">
-                <span class="toggle-label">Show Floor Slabs</span>
-                <span class="toggle-sub">Solid concrete slab geometries</span>
+            <!-- Drilldown for Cells & Interaction -->
+            <div id="group-cells-interaction-drilldown" class="drilldown-container expanded">
+              <!-- Toggle: Show Cell Volumes -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show Cell Volumes</span>
+                  <span class="toggle-sub">Phenotypic 3D cells colored by classification</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-3d-cells">
+                  <span class="slider-switch"></span>
+                </label>
               </div>
-              <label class="switch">
-                <input type="checkbox" id="chk-3d-slabs" checked>
-                <span class="slider-switch"></span>
-              </label>
+
+              <!-- Toggle: Show Hover Labels -->
+              <div class="toggle-container">
+                <div class="toggle-details">
+                  <span class="toggle-label">Show Hover Labels</span>
+                  <span class="toggle-sub">Display phenotypic labels in viewport on cell hover</span>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="chk-hover-labels" checked>
+                  <span class="slider-switch"></span>
+                </label>
+              </div>
             </div>
 
-            <!-- Toggle: Show Roof Slab -->
-            <div class="toggle-container" style="margin-top: 10px;">
-              <div class="toggle-details">
-                <span class="toggle-label">Show Roof Slab</span>
-                <span class="toggle-sub">Composite concrete & timber roof sheets</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="chk-3d-roof" checked>
-                <span class="slider-switch"></span>
-              </label>
-            </div>
-
-            <!-- Toggle: Show Hypar Ceilings -->
-            <div class="toggle-container" style="margin-top: 10px;">
-              <div class="toggle-details">
-                <span class="toggle-label">Show Hypar Ceilings</span>
-                <span class="toggle-sub">Timber hypar slatted ceilings over top-floor bays</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="chk-3d-vaults" checked>
-                <span class="slider-switch"></span>
-              </label>
-            </div>
-
-
-
-            <!-- Toggle: Show Brise-Soleil -->
-            <div class="toggle-container" style="margin-top: 10px;">
-              <div class="toggle-details">
-                <span class="toggle-label">Show Brise-Soleil</span>
-                <span class="toggle-sub">Solar shading louvers on boundary facades</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="chk-3d-brisesoleil" checked>
-                <span class="slider-switch"></span>
-              </label>
-            </div>
-
-
-
-            <!-- Toggle: Show Cell Volumes -->
-            <div class="toggle-container" style="margin-top: 10px; margin-bottom: 10px;">
-              <div class="toggle-details">
-                <span class="toggle-label">Show Cell Volumes</span>
-                <span class="toggle-sub">Phenotypic 3D cells colored by classification</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="chk-3d-cells">
-                <span class="slider-switch"></span>
-              </label>
-            </div>
-
-            <!-- Toggle: Show Hover Labels -->
-            <div class="toggle-container" style="margin-top: 10px; margin-bottom: 10px;">
-              <div class="toggle-details">
-                <span class="toggle-label">Show Hover Labels</span>
-                <span class="toggle-sub">Display phenotypic labels in viewport on cell hover</span>
-              </div>
-              <label class="switch">
-                <input type="checkbox" id="chk-hover-labels" checked>
-                <span class="slider-switch"></span>
-              </label>
-            </div>
 
           </div>
         </section>
