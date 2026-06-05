@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Interactive 2D Medial Axis Transform (MAT) Visualizer</title>
   <meta name="description" content="An interactive real-time visualizer for the fast sampling-based 2D Medial Axis Transform algorithm. Draw custom polygons and inspect skeleton branches, junction points, and maximal inscribed circles.">
-  <script type="module" crossorigin src="/assets/index-CZ8uzxQ4.js"></script>
+  <script type="module" crossorigin src="/assets/index-DLzIfMBN.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-Dh6PQOf7.css">
 </head>
 <body>
@@ -21,6 +21,9 @@
     <!-- Canvas Wrapper -->
     <div class="canvas-wrapper" id="canvas-wrapper">
       <canvas id="polygon-canvas" width="800" height="600"></canvas>
+      
+      <!-- Cell Hover Tooltip Overlay -->
+      <div id="cell-tooltip" style="position: absolute; display: none; background: rgba(15, 23, 42, 0.9); color: #f8fafc; padding: 10px 14px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.15); font-family: system-ui, -apple-system, sans-serif; font-size: 13px; pointer-events: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.5); backdrop-filter: blur(4px); line-height: 1.4;"></div>
       
       <!-- Floating Camera Controls HUD -->
       <div class="camera-hud" id="camera-hud">
@@ -340,6 +343,18 @@
               </div>
               <label class="switch">
                 <input type="checkbox" id="chk-3d-cells" checked>
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+
+            <!-- Toggle: Show Hover Labels -->
+            <div class="toggle-container" style="margin-top: 10px; margin-bottom: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label">Show Hover Labels</span>
+                <span class="toggle-sub">Display phenotypic labels in viewport on cell hover</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-hover-labels" checked>
                 <span class="slider-switch"></span>
               </label>
             </div>

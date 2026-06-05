@@ -59,6 +59,7 @@ const state = {
   louverDepth: 0.2,
   louverSpacing: 1.0,
   vaultHeight: 1.5,
+  showHoverLabels: true,
 };
 
 Object.defineProperty(state, 'polygon', {
@@ -1939,6 +1940,28 @@ function build3DStack() {
 
         let classification = 'interior';
         const isCorner = cellIsCorner[cellIdx];
+        
+        const facingDirections = new Set();
+        for (let k = 0; k < cell.length; k++) {
+          const pt1 = cell[k];
+          const pt2 = cell[(k + 1) % cell.length];
+          const mid = { x: (pt1.x + pt2.x) / 2, y: (pt1.y + pt2.y) / 2 };
+
+          for (let j = 0; j < state.polygon.length; j++) {
+            const bp1 = state.polygon[j];
+            const bp2 = state.polygon[(j + 1) % state.polygon.length];
+
+            if (distanceToSegment(mid, bp1, bp2) < 0.1) {
+              const normal = boundaryNormals[j];
+              if (normal.y > 0.5) facingDirections.add('North');
+              if (normal.y < -0.5) facingDirections.add('South');
+              if (normal.x > 0.5) facingDirections.add('East');
+              if (normal.x < -0.5) facingDirections.add('West');
+            }
+          }
+        }
+        const directionsArray = Array.from(facingDirections);
+
         if (isCorner) {
           classification = 'corner';
         } else {
@@ -1985,7 +2008,8 @@ function build3DStack() {
             vertices: cell.map(pt => ({ x: pt.x, y: pt.y, z: zFloor })),
             topVertices: cell.map(pt => ({ x: pt.x, y: pt.y, z: zFloor + floorHeight })),
             phenotype: classification,
-            color: colorHex
+            color: colorHex,
+            facingDirections: directionsArray
           });
         }
       });
@@ -2380,7 +2404,15 @@ function build3DStack() {
 
         const cellVolumeMesh = new THREE.Mesh(cellVolumeGeom, cellVolumeMat);
         cellVolumeMesh.position.z = cell3d.vertices[0].z;
-        cellVolumeMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+        cellVolumeMesh.userData = {
+           is3DStackMesh: true,
+           isCellVolume: true,
+           polygonId: item.id,
+           cellIdx: cell3d.cellIdx,
+           floorIndex: cell3d.floorIndex,
+           phenotype: cell3d.phenotype,
+           facingDirections: cell3d.facingDirections
+         };
         stack3DGroup.add(cellVolumeMesh);
 
         // Add wireframe outline lines
@@ -2955,6 +2987,17 @@ function setupRhinoUIControls() {
       draw();
     });
   }
+
+  const chkHoverLabels = document.getElementById('chk-hover-labels');
+  if (chkHoverLabels) {
+    chkHoverLabels.addEventListener('change', (e) => {
+      state.showHoverLabels = e.target.checked;
+      if (!state.showHoverLabels) {
+        const tooltip = document.getElementById('cell-tooltip');
+        if (tooltip) tooltip.style.display = 'none';
+      }
+    });
+  }
 }
 
 // Mouse Event Handlers using 3D Raycasting
@@ -3146,6 +3189,57 @@ function handleMouseMove(e) {
   const worldPos = new Vector2D(target.x, target.y);
   state.mouseWorldPos = worldPos;
 
+  // 1. Raycast for 3D Cell Phenotype Tooltip Hover
+  if (state.showHoverLabels && state.show3DCells && !state.isDrawing) {
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, cameraActive);
+    const intersects = raycaster.intersectObjects(stack3DGroup.children, true);
+    
+    let cellVolumeHit = null;
+    for (const hit of intersects) {
+      if (hit.object.userData && hit.object.userData.isCellVolume) {
+        cellVolumeHit = hit.object;
+        break;
+      }
+    }
+
+    const tooltip = document.getElementById('cell-tooltip');
+    if (tooltip) {
+      if (cellVolumeHit) {
+        const uData = cellVolumeHit.userData;
+        const floorText = uData.floorIndex === 0 ? 'Ground Floor' : (uData.floorIndex === state.numFloors - 1 ? 'Roof Floor' : `Intermediate Floor (F${uData.floorIndex})`);
+        
+        let typeText = 'Interior Cell';
+        if (uData.phenotype === 'corner') typeText = 'Corner Cell';
+        else if (uData.phenotype === 'courtyard') typeText = 'Courtyard Cell';
+        else if (uData.phenotype === 'neighbor') typeText = 'Facade Cell (Neighbor)';
+        else if (uData.phenotype === 'open_space') typeText = 'Facade Cell (Open Space)';
+
+        const facingStr = uData.facingDirections && uData.facingDirections.length > 0
+          ? uData.facingDirections.join(', ')
+          : 'N/A (Interior)';
+
+        tooltip.innerHTML = `
+          <div style="font-weight: 700; margin-bottom: 6px; color: #60a5fa; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 4px;">Cell Phenotype</div>
+          <div style="margin-bottom: 4px;"><strong>Level:</strong> ${floorText}</div>
+          <div style="margin-bottom: 4px;"><strong>Type:</strong> ${typeText}</div>
+          <div><strong>Facing:</strong> ${facingStr}</div>
+        `;
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.clientX - rect.left + 15) + 'px';
+        tooltip.style.top = (e.clientY - rect.top + 15) + 'px';
+      } else {
+        tooltip.style.display = 'none';
+      }
+    }
+  } else {
+    const tooltip = document.getElementById('cell-tooltip');
+    if (tooltip) tooltip.style.display = 'none';
+  }
+
   if (state.isDrawing) {
     draw();
   } else if (state.hoverCircle && !state.editBaysMode && state.polygon.length >= 3 && controls.state === -1) {
@@ -3189,6 +3283,8 @@ function handleMouseUp() {
 function handleMouseLeave() {
   state.mouseWorldPos = null;
   state.hoveredMedialPoint = null;
+  const tooltip = document.getElementById('cell-tooltip');
+  if (tooltip) tooltip.style.display = 'none';
   draw();
 }
 
