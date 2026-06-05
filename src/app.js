@@ -2333,40 +2333,80 @@ function createHyparCellGeometry(vertices2D, zTop, zBottomBase, H, spacing, bipa
 
   const zHigh = zTop - 0.05; // 5 cm shadow gap below the concrete roof slab
 
-  if (n === 4) {
-    const M = 8;
-    const v0 = vertices2D[0];
-    const v1 = vertices2D[1];
-    const v2 = vertices2D[2];
-    const v3 = vertices2D[3];
+  const getPtX = pt => pt.x !== undefined ? pt.x : pt[0];
+  const getPtY = pt => pt.y !== undefined ? pt.y : pt[1];
 
-    // Get colors of original vertices
-    const c0 = getVertexColor(originalCell && originalCell[0] ? originalCell[0] : v0, bipartiteData);
-    const c1 = getVertexColor(originalCell && originalCell[1] ? originalCell[1] : v1, bipartiteData);
-    const c2 = getVertexColor(originalCell && originalCell[2] ? originalCell[2] : v2, bipartiteData);
-    const c3 = getVertexColor(originalCell && originalCell[3] ? originalCell[3] : v3, bipartiteData);
+  const xMin = Math.min(...vertices2D.map(v => getPtX(v)));
+  const xMax = Math.max(...vertices2D.map(v => getPtX(v)));
 
-    const h0 = c0 === 0 ? zBottomBase : zHigh;
-    const h1 = c1 === 0 ? zBottomBase : zHigh;
-    const h2 = c2 === 0 ? zBottomBase : zHigh;
-    const h3 = c3 === 0 ? zBottomBase : zHigh;
+  // Bipartite color heights for each vertex of the cell
+  const cellVertHeights = vertices2D.map((v, idx) => {
+    const origV = (originalCell && originalCell[idx]) ? originalCell[idx] : v;
+    const col = getVertexColor(origV, bipartiteData);
+    return col === 0 ? zBottomBase : zHigh;
+  });
 
-    const lenU = (Math.hypot(v0.x - v1.x, v0.y - v1.y) + Math.hypot(v3.x - v2.x, v3.y - v2.y)) / 2;
-    const N_slats = Math.max(2, Math.round(lenU / spacing) + 1);
-    const slatWidth = 0.05; // 5 cm wide
-    const slatDepth = 0.1; // 10 cm deep
-    
-    for (let k = 0; k < N_slats; k++) {
-      const u = k / (N_slats - 1 || 1);
-      
-      // Calculate A (at v = 0) and B (at v = 1) on the hypar underside using colors
-      const Ax = (1 - u) * v0.x + u * v1.x;
-      const Ay = (1 - u) * v0.y + u * v1.y;
-      const Az = (1 - u) * h0 + u * h1;
+  // IDW interpolation helper
+  const interpolateZ = (px, py) => {
+    let sumWeight = 0;
+    let sumZ = 0;
+    for (let i = 0; i < vertices2D.length; i++) {
+      const vx = getPtX(vertices2D[i]);
+      const vy = getPtY(vertices2D[i]);
+      const dist = Math.hypot(px - vx, py - vy);
+      if (dist < 1e-4) {
+        return cellVertHeights[i];
+      }
+      const weight = 1 / (dist * dist);
+      sumWeight += weight;
+      sumZ += weight * cellVertHeights[i];
+    }
+    return sumWeight > 0 ? sumZ / sumWeight : zHigh;
+  };
 
-      const Bx = u * v2.x + (1 - u) * v3.x;
-      const By = u * v2.y + (1 - u) * v3.y;
-      const Bz = (1 - u) * h3 + u * h2;
+  const slatWidth = 0.05; // 5 cm wide
+  const slatDepth = 0.1; // 10 cm deep
+
+  const steps = Math.max(2, Math.round((xMax - xMin) / spacing));
+  
+  for (let s = 1; s < steps; s++) {
+    const t = s / steps;
+    const x = xMin + t * (xMax - xMin);
+
+    // Find intersections of the vertical line X = x with the polygon edges
+    const intersections = [];
+    for (let i = 0; i < n; i++) {
+      const p1 = vertices2D[i];
+      const p2 = vertices2D[(i + 1) % n];
+      const x1 = getPtX(p1);
+      const y1 = getPtY(p1);
+      const x2 = getPtX(p2);
+      const y2 = getPtY(p2);
+
+      if ((x1 <= x && x2 > x) || (x2 <= x && x1 > x)) {
+        if (Math.abs(x2 - x1) > 1e-6) {
+          const y = y1 + (x - x1) * (y2 - y1) / (x2 - x1);
+          intersections.push(y);
+        }
+      }
+    }
+
+    // Sort intersections
+    intersections.sort((a, b) => a - b);
+
+    // Pairwise connect to form slats inside the polygon
+    for (let i = 0; i < intersections.length - 1; i += 2) {
+      const yStart = intersections[i];
+      const yEnd = intersections[i + 1];
+      if (yEnd - yStart < 0.05) continue; // Skip extremely short slats
+
+      const Ax = x;
+      const Ay = yStart;
+      const Az = interpolateZ(Ax, Ay);
+
+      const Bx = x;
+      const By = yEnd;
+      const Bz = interpolateZ(Bx, By);
 
       const dx = Bx - Ax;
       const dy = By - Ay;
@@ -2395,7 +2435,6 @@ function createHyparCellGeometry(vertices2D, zTop, zBottomBase, H, spacing, bipa
       const uNz = uz / uLen;
 
       // V = N x U
-      const vNx = dirY => ny * uNz - nz * uNy; // wait, let's write it direct:
       const vNxVal = ny * uNz - nz * uNy;
       const vNyVal = nz * uNx - nx * uNz;
       const vNzVal = nx * uNy - ny * uNx;
@@ -2405,16 +2444,16 @@ function createHyparCellGeometry(vertices2D, zTop, zBottomBase, H, spacing, bipa
 
       const vIdxStart = positions.length / 3;
 
-      // Add 8 vertices
+      // Add 8 vertices of the slat
       positions.push(Ax - uNx * w - vNxVal * d, Ay - uNy * w - vNyVal * d, Az - uNz * w - vNzVal * d);
-      positions.push(Ax + uNx * w - vNxVal * d, Ay + uNy * w - vNyVal * d, Az + uNz * w + vNzVal * d);
+      positions.push(Ax + uNx * w - vNxVal * d, Ay + uNy * w - vNyVal * d, Az + uNz * w - vNzVal * d);
       positions.push(Ax + uNx * w + vNxVal * d, Ay + uNy * w + vNyVal * d, Az + uNz * w + vNzVal * d);
-      positions.push(Ax - uNx * w + vNxVal * d, Ay - uNy * w - vNyVal * d, Az - uNz * w - vNzVal * d);
+      positions.push(Ax - uNx * w + vNxVal * d, Ay - uNy * w + vNyVal * d, Az - uNz * w + vNzVal * d);
 
       positions.push(Bx - uNx * w - vNxVal * d, By - uNy * w - vNyVal * d, Bz - uNz * w - vNzVal * d);
-      positions.push(Bx + uNx * w - vNxVal * d, By - uNy * w - vNyVal * d, Bz + uNz * w + vNzVal * d);
+      positions.push(Bx + uNx * w - vNxVal * d, By + uNy * w - vNyVal * d, Bz + uNz * w - vNzVal * d);
       positions.push(Bx + uNx * w + vNxVal * d, By + uNy * w + vNyVal * d, Bz + uNz * w + vNzVal * d);
-      positions.push(Bx - uNx * w + vNxVal * d, By - uNy * w - vNyVal * d, Bz - uNz * w - vNzVal * d);
+      positions.push(Bx - uNx * w + vNxVal * d, By + uNy * w + vNyVal * d, Bz - uNz * w + vNzVal * d);
 
       // Add faces for this box (CCW):
       indices.push(vIdxStart + 0, vIdxStart + 2, vIdxStart + 1);
@@ -2435,35 +2474,6 @@ function createHyparCellGeometry(vertices2D, zTop, zBottomBase, H, spacing, bipa
       indices.push(vIdxStart + 3, vIdxStart + 0, vIdxStart + 4);
       indices.push(vIdxStart + 3, vIdxStart + 4, vIdxStart + 7);
     }
-  } else {
-    // Fallback: simple triangulation with bipartite Z heights
-    vertices2D.forEach((v, idx) => {
-      const origV = (originalCell && originalCell[idx]) ? originalCell[idx] : v;
-      const col = getVertexColor(origV, bipartiteData);
-      const z = col === 0 ? zBottomBase : zHigh;
-      positions.push(v.x, v.y, z);
-    });
-    vertices2D.forEach(v => {
-      positions.push(v.x, v.y, zHigh);
-    });
-
-    const pts = vertices2D.map(v => new THREE.Vector2(v.x, v.y));
-    const triangles = THREE.ShapeUtils.triangulateShape(pts, []);
-
-    triangles.forEach(tri => {
-      indices.push(tri[2], tri[1], tri[0]);
-      indices.push(tri[0] + n, tri[1] + n, tri[2] + n);
-    });
-
-    for (let j = 0; j < n; j++) {
-      const jNext = (j + 1) % n;
-      const iBot = j;
-      const iBotNext = jNext;
-      const iTop = j + n;
-      const iTopNext = jNext + n;
-      indices.push(iBot, iBotNext, iTopNext);
-      indices.push(iBot, iTopNext, iTop);
-    }
   }
 
   geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -2471,6 +2481,7 @@ function createHyparCellGeometry(vertices2D, zTop, zBottomBase, H, spacing, bipa
   geom.computeVertexNormals();
   return geom;
 }
+
 
 function createArchedBeamGeometry(bLen, bWidth, bDepth, vaultHeight, M = 8) {
   const geom = new THREE.BufferGeometry();

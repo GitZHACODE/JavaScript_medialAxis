@@ -172,7 +172,7 @@ function createHyparCellMesh(rhino, vertices2D, zTop, zBottomBase, H, spacing, b
     const n = vertices2D.length;
     if (n < 3) return mesh;
 
-    const zHigh = zTop - 0.05;
+    const zHigh = zTop - 0.05; // 5 cm shadow gap below the concrete roof slab
 
     const getPtX = pt => pt[0] !== undefined ? pt[0] : pt.x;
     const getPtY = pt => pt[1] !== undefined ? pt[1] : pt.y;
@@ -192,40 +192,78 @@ function createHyparCellMesh(rhino, vertices2D, zTop, zBottomBase, H, spacing, b
         return 0;
     };
 
-    if (n === 4) {
-        const M = 8;
-        const v0 = vertices2D[0];
-        const v1 = vertices2D[1];
-        const v2 = vertices2D[2];
-        const v3 = vertices2D[3];
+    const xMin = Math.min(...vertices2D.map(v => getPtX(v)));
+    const xMax = Math.max(...vertices2D.map(v => getPtX(v)));
 
-        const c0 = getVertexColor(originalCell && originalCell[0] ? originalCell[0] : v0);
-        const c1 = getVertexColor(originalCell && originalCell[1] ? originalCell[1] : v1);
-        const c2 = getVertexColor(originalCell && originalCell[2] ? originalCell[2] : v2);
-        const c3 = getVertexColor(originalCell && originalCell[3] ? originalCell[3] : v3);
+    // Bipartite color heights for each vertex of the cell
+    const cellVertHeights = vertices2D.map((v, idx) => {
+        const origV = (originalCell && originalCell[idx]) ? originalCell[idx] : v;
+        const col = getVertexColor(origV);
+        return col === 0 ? zBottomBase : zHigh;
+    });
 
-        const h0 = c0 === 0 ? zBottomBase : zHigh;
-        const h1 = c1 === 0 ? zBottomBase : zHigh;
-        const h2 = c2 === 0 ? zBottomBase : zHigh;
-        const h3 = c3 === 0 ? zBottomBase : zHigh;
+    // IDW interpolation helper
+    const interpolateZ = (px, py) => {
+        let sumWeight = 0;
+        let sumZ = 0;
+        for (let i = 0; i < vertices2D.length; i++) {
+            const vx = getPtX(vertices2D[i]);
+            const vy = getPtY(vertices2D[i]);
+            const dist = Math.hypot(px - vx, py - vy);
+            if (dist < 1e-4) {
+                return cellVertHeights[i];
+            }
+            const weight = 1 / (dist * dist);
+            sumWeight += weight;
+            sumZ += weight * cellVertHeights[i];
+        }
+        return sumWeight > 0 ? sumZ / sumWeight : zHigh;
+    };
 
-        const lenU = (Math.hypot(getPtX(v0) - getPtX(v1), getPtY(v0) - getPtY(v1)) + Math.hypot(getPtX(v3) - getPtX(v2), getPtY(v3) - getPtY(v2))) / 2;
-        const N_slats = Math.max(2, Math.round(lenU / spacing) + 1);
-        const slatWidth = 0.05;
-        const slatDepth = 0.1;
+    const slatWidth = 0.05; // 5 cm wide
+    const slatDepth = 0.1; // 10 cm deep
 
-        let vOffset = 0;
+    const steps = Math.max(2, Math.round((xMax - xMin) / spacing));
+    let vOffset = 0;
 
-        for (let k = 0; k < N_slats; k++) {
-            const u = k / (N_slats - 1 || 1);
+    for (let s = 1; s < steps; s++) {
+        const t = s / steps;
+        const x = xMin + t * (xMax - xMin);
 
-            const Ax = (1 - u) * getPtX(v0) + u * getPtX(v1);
-            const Ay = (1 - u) * getPtY(v0) + u * getPtY(v1);
-            const Az = (1 - u) * h0 + u * h1;
+        // Find intersections of the vertical line X = x with the polygon edges
+        const intersections = [];
+        for (let i = 0; i < n; i++) {
+            const p1 = vertices2D[i];
+            const p2 = vertices2D[(i + 1) % n];
+            const x1 = getPtX(p1);
+            const y1 = getPtY(p1);
+            const x2 = getPtX(p2);
+            const y2 = getPtY(p2);
 
-            const Bx = u * getPtX(v2) + (1 - u) * getPtX(v3);
-            const By = u * getPtY(v2) + (1 - u) * getPtY(v3);
-            const Bz = (1 - u) * h3 + u * h2;
+            if ((x1 <= x && x2 > x) || (x2 <= x && x1 > x)) {
+                if (Math.abs(x2 - x1) > 1e-6) {
+                    const y = y1 + (x - x1) * (y2 - y1) / (x2 - x1);
+                    intersections.push(y);
+                }
+            }
+        }
+
+        // Sort intersections
+        intersections.sort((a, b) => a - b);
+
+        // Pairwise connect to form slats inside the polygon
+        for (let i = 0; i < intersections.length - 1; i += 2) {
+            const yStart = intersections[i];
+            const yEnd = intersections[i + 1];
+            if (yEnd - yStart < 0.05) continue; // Skip extremely short slats
+
+            const Ax = x;
+            const Ay = yStart;
+            const Az = interpolateZ(Ax, Ay);
+
+            const Bx = x;
+            const By = yEnd;
+            const Bz = interpolateZ(Bx, By);
 
             const dx = Bx - Ax;
             const dy = By - Ay;
@@ -237,6 +275,7 @@ function createHyparCellMesh(rhino, vertices2D, zTop, zBottomBase, H, spacing, b
             const ny = dy / len;
             const nz = dz / len;
 
+            // Perpendicular vector U
             let ux, uy, uz;
             if (Math.abs(nx) < 0.9 && Math.abs(ny) < 0.9) {
                 ux = -ny;
@@ -252,6 +291,7 @@ function createHyparCellMesh(rhino, vertices2D, zTop, zBottomBase, H, spacing, b
             const uNy = uy / uLen;
             const uNz = uz / uLen;
 
+            // V = N x U
             const vNxVal = ny * uNz - nz * uNy;
             const vNyVal = nz * uNx - nx * uNz;
             const vNzVal = nx * uNy - ny * uNx;
@@ -259,17 +299,18 @@ function createHyparCellMesh(rhino, vertices2D, zTop, zBottomBase, H, spacing, b
             const w = slatWidth / 2;
             const d = slatDepth / 2;
 
+            // Add 8 vertices of the slat
             mesh.vertices().add(Ax - uNx * w - vNxVal * d, Ay - uNy * w - vNyVal * d, Az - uNz * w - vNzVal * d);
-            mesh.vertices().add(Ax + uNx * w - vNxVal * d, Ay + uNy * w - vNyVal * d, Az + uNz * w + vNzVal * d);
+            mesh.vertices().add(Ax + uNx * w - vNxVal * d, Ay + uNy * w - vNyVal * d, Az + uNz * w - vNzVal * d);
             mesh.vertices().add(Ax + uNx * w + vNxVal * d, Ay + uNy * w + vNyVal * d, Az + uNz * w + vNzVal * d);
-            mesh.vertices().add(Ax - uNx * w + vNxVal * d, Ay - uNy * w - vNyVal * d, Az - uNz * w - vNzVal * d);
+            mesh.vertices().add(Ax - uNx * w + vNxVal * d, Ay - uNy * w + vNyVal * d, Az - uNz * w + vNzVal * d);
 
             mesh.vertices().add(Bx - uNx * w - vNxVal * d, By - uNy * w - vNyVal * d, Bz - uNz * w - vNzVal * d);
-            mesh.vertices().add(Bx + uNx * w - vNxVal * d, By - uNy * w - vNyVal * d, Bz + uNz * w + vNzVal * d);
-            mesh.vertices().add(Bx + uNx * w + vNxVal * d, By - uNy * w + vNyVal * d, Bz + uNz * w + vNzVal * d);
-            mesh.vertices().add(Bx - uNx * w + vNxVal * d, By - uNy * w - vNyVal * d, Bz - uNz * w - vNzVal * d);
+            mesh.vertices().add(Bx + uNx * w - vNxVal * d, By + uNy * w - vNyVal * d, Bz + uNz * w - vNzVal * d);
+            mesh.vertices().add(Bx + uNx * w + vNxVal * d, By + uNy * w + vNyVal * d, Bz + uNz * w + vNzVal * d);
+            mesh.vertices().add(Bx - uNx * w + vNxVal * d, By + uNy * w + vNyVal * d, Bz - uNz * w + vNzVal * d);
 
-            // Add faces
+            // Add faces (CCW)
             mesh.faces().addFace(vOffset + 0, vOffset + 2, vOffset + 1, vOffset + 0);
             mesh.faces().addFace(vOffset + 0, vOffset + 3, vOffset + 2, vOffset + 0);
 
@@ -289,34 +330,6 @@ function createHyparCellMesh(rhino, vertices2D, zTop, zBottomBase, H, spacing, b
             mesh.faces().addFace(vOffset + 3, vOffset + 4, vOffset + 7, vOffset + 3);
 
             vOffset += 8;
-        }
-    } else {
-        // Fallback: simple triangulation with bipartite Z heights
-        const getPtX = pt => pt[0] !== undefined ? pt[0] : pt.x;
-        const getPtY = pt => pt[1] !== undefined ? pt[1] : pt.y;
-
-        vertices2D.forEach((v) => {
-            const col = getVertexColor(v);
-            const z = col === 0 ? zBottomBase : zHigh;
-            mesh.vertices().add(getPtX(v), getPtY(v), z);
-        });
-        vertices2D.forEach((v) => {
-            mesh.vertices().add(getPtX(v), getPtY(v), zHigh);
-        });
-
-        for (let j = 1; j < n - 1; j++) {
-            mesh.faces().addTriFace(0, j + 1, j);
-            mesh.faces().addTriFace(0 + n, j + n, j + 1 + n);
-        }
-
-        for (let j = 0; j < n; j++) {
-            const jNext = (j + 1) % n;
-            const iBot = j;
-            const iBotNext = jNext;
-            const iTop = j + n;
-            const iTopNext = jNext + n;
-            mesh.faces().addFace(iBot, iBotNext, iTopNext, iBot);
-            mesh.faces().addFace(iBot, iTopNext, iTop, iBot);
         }
     }
 
