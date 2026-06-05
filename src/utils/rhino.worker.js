@@ -573,10 +573,6 @@ function distanceToPolygonWorker(pt, boundary) {
     return minDist;
 }
 
-function isInteriorSkeletonPointWorker(pt, boundary) {
-    return distanceToPolygonWorker(pt, boundary) > 0.05;
-}
-
 function createRoofSheetMesh(rhino, structuralBays, cantileverCells, zTop, RH, isConcrete, boundary) {
     const mesh = new rhino.Mesh();
     let vOffset = 0;
@@ -598,15 +594,7 @@ function createRoofSheetMesh(rhino, structuralBays, cantileverCells, zTop, RH, i
     };
 
     const getVertexHeight = (v) => {
-        if (isConcrete) {
-            return zTop + RH;
-        }
-        const isInterior = isInteriorSkeletonPointWorker(v, boundary);
-        if (isInterior) {
-            return zTop - RH;
-        } else {
-            return zTop;
-        }
+        return isConcrete ? (zTop + RH) : zTop;
     };
 
     // 1. Add structural bays (never cantilevered)

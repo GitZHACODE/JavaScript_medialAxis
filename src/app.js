@@ -2211,11 +2211,6 @@ function getVertexColor(pt, bipartiteData) {
   return 0;
 }
 
-function isInteriorSkeletonPoint(pt, polygon) {
-  const { distance } = distanceToPolygon(pt, polygon);
-  return distance > 0.05;
-}
-
 function createRoofSheetGeometry(structuralBays, cantileverCells, zTop, RH, isConcrete) {
   const geom = new THREE.BufferGeometry();
   const positions = [];
@@ -2232,15 +2227,7 @@ function createRoofSheetGeometry(structuralBays, cantileverCells, zTop, RH, isCo
   };
 
   const getVertexHeight = (v) => {
-    if (isConcrete) {
-      return zTop + RH;
-    }
-    const isInterior = isInteriorSkeletonPoint(v, state.polygon);
-    if (isInterior) {
-      return zTop - RH;
-    } else {
-      return zTop;
-    }
+    return isConcrete ? (zTop + RH) : zTop;
   };
 
   // 1. Add structural bays (never cantilevered)
