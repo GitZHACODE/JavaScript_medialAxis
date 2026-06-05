@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Interactive 2D Medial Axis Transform (MAT) Visualizer</title>
   <meta name="description" content="An interactive real-time visualizer for the fast sampling-based 2D Medial Axis Transform algorithm. Draw custom polygons and inspect skeleton branches, junction points, and maximal inscribed circles.">
-  <script type="module" crossorigin src="/assets/index-BUvCw8-Y.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-Bxst5PZT.css">
+  <script type="module" crossorigin src="/assets/index-Bd5-2xf0.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-Dh6PQOf7.css">
 </head>
 <body>
 
@@ -229,6 +229,107 @@
                 </div>
                 <button class="btn" id="btn-reset-bay-edits" style="padding: 6px 10px; font-size: 0.75rem; justify-content: center; width: 100%;">Reset Edits</button>
               </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- 3D Structural Stack Section -->
+        <section class="control-group collapsible" id="section-3d-stack">
+          <h3 class="collapsible-header" id="header-3d-stack">
+            3D Structural Stack
+            <span class="chevron">▼</span>
+          </h3>
+          <div class="collapsible-content" id="content-3d-stack" style="display: block;">
+            
+            <!-- Number of Floors Slider -->
+            <div class="slider-container" style="margin-top: 10px;">
+              <div class="slider-info">
+                <span class="slider-label">Number of Floors</span>
+                <span class="slider-value" id="val-floors">3</span>
+              </div>
+              <input type="range" id="slider-floors" min="1" max="5" value="3">
+            </div>
+
+            <!-- Floor Height Slider -->
+            <div class="slider-container" style="margin-top: 10px; margin-bottom: 10px;">
+              <div class="slider-info">
+                <span class="slider-label">Floor Height (m)</span>
+                <span class="slider-value" id="val-floor-height">4.0m</span>
+              </div>
+              <input type="range" id="slider-floor-height" min="2.5" max="5.0" step="0.1" value="4.0">
+            </div>
+
+            <!-- Toggle: Show 3D Columns -->
+            <div class="toggle-container" style="margin-top: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label">Show 3D Columns</span>
+                <span class="toggle-sub">Parametric column cylinders at grid nodes</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-3d-columns" checked>
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+
+            <!-- Toggle: Show 3D Beams -->
+            <div class="toggle-container" style="margin-top: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label">Show 3D Beams</span>
+                <span class="toggle-sub">Parametric beam profiles along grid edges</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-3d-beams" checked>
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+
+            <!-- Toggle: Show Floor Slabs -->
+            <div class="toggle-container" style="margin-top: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label">Show Floor Slabs</span>
+                <span class="toggle-sub">Solid concrete slab geometries</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-3d-slabs" checked>
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+
+            <!-- Toggle: Show Balconies -->
+            <div class="toggle-container" style="margin-top: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label">Show Balconies</span>
+                <span class="toggle-sub">Cantilevered slabs along boundary edges</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-3d-balconies" checked>
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+
+            <!-- Toggle: Show Brise-Soleil -->
+            <div class="toggle-container" style="margin-top: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label">Show Brise-Soleil</span>
+                <span class="toggle-sub">Solar shading louvers on boundary facades</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-3d-brisesoleil" checked>
+                <span class="slider-switch"></span>
+              </label>
+            </div>
+
+            <!-- Toggle: Show Vaulted Roofs -->
+            <div class="toggle-container" style="margin-top: 10px; margin-bottom: 10px;">
+              <div class="toggle-details">
+                <span class="toggle-label">Show Vaulted Roofs</span>
+                <span class="toggle-sub">Parametric vaulted shells over top-floor bays</span>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="chk-3d-vaults" checked>
+                <span class="slider-switch"></span>
+              </label>
             </div>
 
           </div>

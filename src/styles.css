@@ -699,7 +699,7 @@ input:checked + .slider-switch:before {
   transform: rotate(-90deg);
 }
 .collapsible-content {
-  max-height: 500px;
+  max-height: 1200px;
   overflow: hidden;
   transition: max-height 0.25s ease-in-out, opacity 0.2s ease-in-out;
   opacity: 1;

@@ -9,7 +9,8 @@ import { PlanarGraph } from './utils/planarGraph.js';
 
 // Application State
 const state = {
-  polygon: [],
+  importedPolygons: [],
+  activePolygonId: 'default',
   activePreset: 'tree',
   samplesPerEdge: 25,
   precision: 1e-5,
@@ -20,16 +21,11 @@ const state = {
   showRibs: true,
   ribSpacing: 10.0, // Default in meters
   showBays: true,
-  structuralBays: [],
   editBaysMode: true,
-  selectedBayIndices: [],
-  bayEdits: [], // Array of { type: 'delete'|'merge', points: Vector2D[] }
-  graphVertexOverrides: new Map(),
   draggedGraphVertexIdx: -1,
   draggedGraphVertexOrig: null,
   draggedGraphEdgeIdx: -1,
   dragStartMousePos: null,
-  planarGraph: null,
   hoverCircle: false,
   showGovernors: false,
   isDrawing: false,
@@ -39,13 +35,122 @@ const state = {
   selectedVertexIdx: -1,
   selectedVertexOrig: null,
   hoveredMedialPoint: null,
-  skeletonData: { regularPoints: [], junctionPoints: [], simplifiedSegments: [], simplifiedNodes: [] },
   computeTime: 0,
   camera: {
     zoom: 1.0 // kept for backward compatibility and HUD display
   },
   mouseWorldPos: null,
+  numFloors: 3,
+  floorHeight: 4.0,
+  show3DColumns: true,
+  show3DBeams: true,
+  showFloorSlabs: true,
+  showBalconies: true,
+  showBriseSoleil: true,
+  showVaultedRoofs: true,
+  columnRadius: 0.25,
+  beamWidth: 0.3,
+  beamDepth: 0.5,
+  slabThickness: 0.2,
+  balconyOffset: 1.5,
+  balconyThickness: 0.15,
+  louverWidth: 0.05,
+  louverDepth: 0.2,
+  louverSpacing: 1.0,
+  vaultHeight: 1.5,
 };
+
+Object.defineProperty(state, 'polygon', {
+  get() {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    return active ? active.polygon : [];
+  },
+  set(val) {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    if (active) {
+      active.polygon = val;
+    } else {
+      state.importedPolygons = [{
+        id: 'default',
+        polygon: val,
+        hasScaffold: true,
+        planarGraph: null,
+        structuralBays: [],
+        selectedBayIndices: [],
+        bayEdits: [],
+        graphVertexOverrides: new Map(),
+        skeletonData: { regularPoints: [], junctionPoints: [], simplifiedSegments: [], simplifiedNodes: [] }
+      }];
+      state.activePolygonId = 'default';
+    }
+  }
+});
+
+Object.defineProperty(state, 'planarGraph', {
+  get() {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    return active ? active.planarGraph : null;
+  },
+  set(val) {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    if (active) active.planarGraph = val;
+  }
+});
+
+Object.defineProperty(state, 'structuralBays', {
+  get() {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    return active ? active.structuralBays : [];
+  },
+  set(val) {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    if (active) active.structuralBays = val;
+  }
+});
+
+Object.defineProperty(state, 'skeletonData', {
+  get() {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    return active ? active.skeletonData : { regularPoints: [], junctionPoints: [], simplifiedSegments: [], simplifiedNodes: [] };
+  },
+  set(val) {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    if (active) active.skeletonData = val;
+  }
+});
+
+Object.defineProperty(state, 'selectedBayIndices', {
+  get() {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    return active ? active.selectedBayIndices : [];
+  },
+  set(val) {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    if (active) active.selectedBayIndices = val;
+  }
+});
+
+Object.defineProperty(state, 'bayEdits', {
+  get() {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    return active ? active.bayEdits : [];
+  },
+  set(val) {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    if (active) active.bayEdits = val;
+  }
+});
+
+Object.defineProperty(state, 'graphVertexOverrides', {
+  get() {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    return active ? active.graphVertexOverrides : new Map();
+  },
+  set(val) {
+    const active = state.importedPolygons.find(p => p.id === state.activePolygonId);
+    if (active) active.graphVertexOverrides = val;
+  }
+});
 
 // Canvas Setup
 const canvas = document.getElementById('polygon-canvas');
@@ -56,6 +161,7 @@ let renderer, scene, cameraPerspective, cameraOrthographic, cameraActive;
 let controls;
 let meshesGroup; // Group to hold all dynamic geometric meshes
 let rhinoGroup;
+let stack3DGroup;
 let rhinoManager;
 let transformControls;
 let manipulatorTarget;
@@ -63,8 +169,22 @@ let manipulatorTarget;
 const appContext = {
   state,
   rhinoGroup: null,
-  setPolygonFrom3dm: (points) => {
-    state.polygon = points.map(pt => new Vector2D(pt[0], pt[1]));
+  setPolygonsFrom3dm: (polygons) => {
+    state.importedPolygons = polygons.map((poly, idx) => {
+      const pts = poly.map(pt => new Vector2D(pt[0], pt[1]));
+      return {
+        id: `rhino-poly-${idx}-${Date.now()}`,
+        polygon: pts,
+        hasScaffold: false, // Default is unticked/inactive as requested!
+        planarGraph: null,
+        structuralBays: [],
+        selectedBayIndices: [],
+        bayEdits: [],
+        graphVertexOverrides: new Map(),
+        skeletonData: { regularPoints: [], junctionPoints: [], simplifiedSegments: [], simplifiedNodes: [] }
+      };
+    });
+
     state.activePreset = 'custom';
     
     const cards = document.querySelectorAll('.preset-card');
@@ -74,6 +194,12 @@ const appContext = {
     if (cardCustom) {
       cardCustom.style.display = 'flex';
       cardCustom.classList.add('active');
+    }
+
+    if (state.importedPolygons.length > 0) {
+      state.activePolygonId = state.importedPolygons[0].id;
+    } else {
+      state.activePolygonId = null;
     }
 
     recomputeMAT();
@@ -152,6 +278,9 @@ function initThree() {
   rhinoGroup = new THREE.Group();
   scene.add(rhinoGroup);
   appContext.rhinoGroup = rhinoGroup;
+
+  stack3DGroup = new THREE.Group();
+  scene.add(stack3DGroup);
 
   rhinoManager = new RhinoManager(appContext);
   window.rhinoManager = rhinoManager;
@@ -355,6 +484,8 @@ function resizeCanvas() {
 // Loads a preset shape and triggers computation
 function loadPreset(name) {
   state.activePreset = name;
+  state.importedPolygons = [];
+  state.activePolygonId = 'default';
   state.graphVertexOverrides.clear();
   state.bayEdits = [];
   state.selectedBayIndices = [];
@@ -627,13 +758,63 @@ function filterPlanarGraphByActiveBays(graph, activeBays) {
 
 // Compute the Medial Axis Transform using core library class
 function recomputeMAT() {
-  if (state.polygon.length < 3) {
-    state.skeletonData = { regularPoints: [], junctionPoints: [] };
-    draw();
-    return;
+  const originalActiveId = state.activePolygonId;
+  const start = performance.now();
+
+  for (const item of state.importedPolygons) {
+    if (!item.hasScaffold) {
+      item.skeletonData = { regularPoints: [], junctionPoints: [], simplifiedSegments: [], simplifiedNodes: [] };
+      item.planarGraph = null;
+      item.structuralBays = [];
+      continue;
+    }
+
+    // Temporarily set active id so getters resolve to this item
+    state.activePolygonId = item.id;
+
+    computeSingleScaffold();
   }
 
-  const start = performance.now();
+  // Restore original active id
+  state.activePolygonId = originalActiveId;
+
+  state.computeTime = performance.now() - start;
+
+  // Sync visibility of merge distance and ribs sliders
+  const containerMerge = document.getElementById('container-merge-slider');
+  if (containerMerge) {
+    containerMerge.style.display = state.simplifySkeleton ? 'block' : 'none';
+  }
+  const containerRibs = document.getElementById('container-ribs-slider');
+  if (containerRibs) {
+    containerRibs.style.display = state.showRibs ? 'block' : 'none';
+  }
+
+  // Update Status HUD
+  document.getElementById('stats-render-time').innerText = `Computation: ${state.computeTime.toFixed(1)}ms`;
+  
+  const activeItem = state.importedPolygons.find(p => p.id === state.activePolygonId);
+  if (activeItem && activeItem.hasScaffold) {
+    const count = activeItem.skeletonData.regularPoints.length + activeItem.skeletonData.junctionPoints.length;
+    const segmentsCount = activeItem.skeletonData.simplifiedSegments.length;
+    const nodesCount = activeItem.skeletonData.simplifiedNodes.length;
+    const statusMsg = state.simplifySkeleton 
+      ? `Simplified skeleton to ${nodesCount} merged nodes and ${segmentsCount} straight branches.`
+      : `Computed ${count} medial points successfully.`;
+    document.getElementById('status-text').innerText = statusMsg;
+  } else {
+    document.getElementById('status-text').innerText = "Select a curve in the viewport to apply the scaffold.";
+  }
+
+  state.hoveredMedialPoint = null;
+  draw();
+}
+
+function computeSingleScaffold() {
+  if (state.polygon.length < 3) {
+    state.skeletonData = { regularPoints: [], junctionPoints: [] };
+    return;
+  }
 
   // 1. Deform boundary polygon using overrides
   for (const p of state.polygon) {
@@ -843,36 +1024,9 @@ function recomputeMAT() {
     
     // Synchronize graph: filter out edges not on active bay boundaries
     filterPlanarGraphByActiveBays(graph, state.structuralBays);
-    
-    console.log(`[PlanarGraph] Extracted raw ${rawBays.length} bays, applied edits to get ${state.structuralBays.length} bays.`);
   } else {
     state.structuralBays = [];
   }
-
-  state.computeTime = performance.now() - start;
-
-  // Sync visibility of merge distance and ribs sliders
-  const containerMerge = document.getElementById('container-merge-slider');
-  if (containerMerge) {
-    containerMerge.style.display = state.simplifySkeleton ? 'block' : 'none';
-  }
-  const containerRibs = document.getElementById('container-ribs-slider');
-  if (containerRibs) {
-    containerRibs.style.display = state.showRibs ? 'block' : 'none';
-  }
-
-  // Update Status HUD
-  document.getElementById('stats-render-time').innerText = `Computation: ${state.computeTime.toFixed(1)}ms`;
-  const count = state.skeletonData.regularPoints.length + state.skeletonData.junctionPoints.length;
-  const segmentsCount = state.skeletonData.simplifiedSegments.length;
-  const nodesCount = state.skeletonData.simplifiedNodes.length;
-  const statusMsg = state.simplifySkeleton 
-    ? `Simplified skeleton to ${nodesCount} merged nodes and ${segmentsCount} straight branches.`
-    : `Computed ${count} medial points successfully.`;
-  document.getElementById('status-text').innerText = statusMsg;
-
-  state.hoveredMedialPoint = null;
-  draw();
 }
 
 const crossesPolygonBoundary = (p1, p2, polygon) => {
@@ -1099,16 +1253,20 @@ function computeAcceptedRibs() {
 }
 
 // 3D Scene Geometry Builder (Clears and populates meshesGroup)
+// 3D Scene Geometry Builder (Clears and populates meshesGroup)
 function draw() {
   if (!meshesGroup) return;
 
+  const originalActiveId = state.activePolygonId;
+
   // Sync selected vertex index for planar graph if selection is graph-based
-  if (state.selectedVertexType === 'graph' && state.selectedVertexOrig && state.planarGraph) {
+  const activeItem = state.importedPolygons.find(p => p.id === state.activePolygonId);
+  if (activeItem && state.selectedVertexType === 'graph' && state.selectedVertexOrig && activeItem.planarGraph) {
     const orig = state.selectedVertexOrig;
     let foundIdx = -1;
     let minDist = Infinity;
-    for (let i = 0; i < state.planarGraph.vertices.length; i++) {
-      const origV = state.planarGraph.originalVertices[i];
+    for (let i = 0; i < activeItem.planarGraph.vertices.length; i++) {
+      const origV = activeItem.planarGraph.originalVertices[i];
       if (origV) {
         const d = Math.hypot(orig.x - origV.x, orig.y - origV.y);
         if (d < 0.1 && d < minDist) {
@@ -1127,7 +1285,7 @@ function draw() {
     }
   }
 
-  // 1. Clear previous dynamic 3D meshes
+  // 1. Clear previous dynamic 2D meshes
   while (meshesGroup.children.length > 0) {
     const child = meshesGroup.children[0];
     meshesGroup.remove(child);
@@ -1141,56 +1299,15 @@ function draw() {
     }
   }
 
-  // 2. Draw Polygon Face & Outlines
-  if (state.polygon.length >= 3) {
-    // Flat Translucent Indigo Polygon Face Fill
-    const shape = new THREE.Shape();
-    shape.moveTo(state.polygon[0].x, state.polygon[0].y);
-    for (let i = 1; i < state.polygon.length; i++) {
-      shape.lineTo(state.polygon[i].x, state.polygon[i].y);
-    }
-    shape.closePath();
-
-    const faceGeom = new THREE.ShapeGeometry(shape);
-    const faceMat = new THREE.MeshBasicMaterial({
-      color: 0x374151, // Dark Slate Grey
-      transparent: true,
-      opacity: 0.05,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const faceMesh = new THREE.Mesh(faceGeom, faceMat);
-    faceMesh.position.z = 0.005; // Slightly off the grid floor
-    meshesGroup.add(faceMesh);
-
-
-
-    // Polygon Thick Boundary Outline (Slightly raised Z to overlay clean)
-    const boundaryPts = state.polygon.map(p => new THREE.Vector3(p.x, p.y, 0.02));
-    boundaryPts.push(boundaryPts[0]); // Close boundary
-    const boundaryGeom = new THREE.BufferGeometry().setFromPoints(boundaryPts);
-    const boundaryMat = new THREE.LineBasicMaterial({
-      color: 0x374151, // Dark Slate Grey
-      linewidth: 2.0
-    });
-    const boundaryLine = new THREE.Line(boundaryGeom, boundaryMat);
-    meshesGroup.add(boundaryLine);
-  }
-
-  // 3. Custom Polygon Drawing Preview
+  // 2. Custom Polygon Drawing Preview
   if (state.isDrawing && state.customVertices.length > 0) {
     const previewPts = state.customVertices.map(v => new THREE.Vector3(v.x, v.y, 0.025));
-    
-    // Live dashed line tracking cursor position
     if (state.mouseWorldPos) {
       previewPts.push(new THREE.Vector3(state.mouseWorldPos.x, state.mouseWorldPos.y, 0.025));
-      
       if (state.customVertices.length >= 3) {
-        // Line linking back to first vertex to preview closing
         previewPts.push(new THREE.Vector3(state.customVertices[0].x, state.customVertices[0].y, 0.025));
       }
     }
-
     if (previewPts.length >= 2) {
       const previewGeom = new THREE.BufferGeometry().setFromPoints(previewPts);
       const previewMat = new THREE.LineBasicMaterial({
@@ -1201,8 +1318,6 @@ function draw() {
       previewLine.raycast = function() {};
       meshesGroup.add(previewLine);
     }
-
-    // Custom points discs
     const customSphGeom = new THREE.CircleGeometry(0.7, 32);
     for (let i = 0; i < state.customVertices.length; i++) {
       const v = state.customVertices[i];
@@ -1210,9 +1325,8 @@ function draw() {
       let isNearFirst = false;
       if (isFirst && state.mouseWorldPos) {
         const d = Math.sqrt((v.x - state.mouseWorldPos.x)**2 + (v.y - state.mouseWorldPos.y)**2);
-        isNearFirst = d < 2.0; // 2.0 world meters closure threshold
+        isNearFirst = d < 2.0;
       }
-
       const customSphMat = new THREE.MeshBasicMaterial({
         color: isNearFirst ? 0x10b981 : (isFirst ? 0x374151 : 0x4b5563)
       });
@@ -1223,357 +1337,331 @@ function draw() {
     }
   }
 
-  // 4. Draw Medial Axis Skeleton
-  if (state.showSkeleton && state.polygon.length >= 3) {
-    const pts = state.skeletonData.regularPoints;
+  // Draw each imported polygon
+  state.importedPolygons.forEach(item => {
+    state.activePolygonId = item.id;
+    const isSelfActive = item.id === originalActiveId;
 
-    if (state.simplifySkeleton) {
-      // Render Simplified MST straight branches as elegant thick lines
-      const segmentsToDraw = state.pruneBranches
-        ? state.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
-        : state.skeletonData.simplifiedSegments;
-
-      const simplifiedLineMat = new THREE.LineBasicMaterial({
-        color: 0x374151, // Dark Slate Grey
-        linewidth: 3.5
-      });
-
-      for (const seg of segmentsToDraw) {
-        const linePts = [
-          new THREE.Vector3(seg.start.x, seg.start.y, 0.035),
-          new THREE.Vector3(seg.end.x, seg.end.y, 0.035)
-        ];
-        const geom = new THREE.BufferGeometry().setFromPoints(linePts);
-        const line = new THREE.Line(geom, simplifiedLineMat);
-        line.raycast = function() {};
-        meshesGroup.add(line);
+    if (state.polygon.length >= 3) {
+      const shape = new THREE.Shape();
+      shape.moveTo(state.polygon[0].x, state.polygon[0].y);
+      for (let i = 1; i < state.polygon.length; i++) {
+        shape.lineTo(state.polygon[i].x, state.polygon[i].y);
       }
-    } else {
-      // Render Default curved skeleton lines
-      const samples = state.samplesPerEdge;
-      const curveMat = new THREE.LineBasicMaterial({
-        color: 0x6b7280, // Medium Slate Grey
-        transparent: true,
-        opacity: 0.65,
-        linewidth: 1.5
-      });
+      shape.closePath();
 
-      for (let i = 0; i < state.polygon.length; i++) {
-        const pointsVec3 = [];
-        for (let j = 0; j < samples; j++) {
-          const idx = i * samples + j;
-          if (pts[idx]) {
-            pointsVec3.push(new THREE.Vector3(pts[idx].x, pts[idx].y, 0.025));
+      const faceGeom = new THREE.ShapeGeometry(shape);
+      const faceMat = new THREE.MeshBasicMaterial({
+        color: item.hasScaffold ? (isSelfActive ? 0x4f46e5 : 0x374151) : 0x9ca3af,
+        transparent: true,
+        opacity: item.hasScaffold ? (isSelfActive ? 0.08 : 0.04) : 0.015,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      });
+      const faceMesh = new THREE.Mesh(faceGeom, faceMat);
+      faceMesh.position.z = 0.005;
+      faceMesh.userData = { isPolygonFace: true, polygonId: item.id };
+      meshesGroup.add(faceMesh);
+
+      const boundaryPts = state.polygon.map(p => new THREE.Vector3(p.x, p.y, 0.02));
+      boundaryPts.push(boundaryPts[0]);
+      const boundaryGeom = new THREE.BufferGeometry().setFromPoints(boundaryPts);
+      const boundaryMat = new THREE.LineBasicMaterial({
+        color: item.hasScaffold ? (isSelfActive ? 0x4f46e5 : 0x374151) : 0x9ca3af,
+        linewidth: isSelfActive ? 2.5 : 1.5
+      });
+      const boundaryLine = new THREE.Line(boundaryGeom, boundaryMat);
+      boundaryLine.userData = { isPolygonLine: true, polygonId: item.id };
+      meshesGroup.add(boundaryLine);
+    }
+
+    if (item.hasScaffold && state.polygon.length >= 3) {
+      // 4. Draw Medial Axis Skeleton
+      if (state.showSkeleton) {
+        const pts = state.skeletonData.regularPoints;
+        if (state.simplifySkeleton) {
+          const segmentsToDraw = state.pruneBranches
+            ? state.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
+            : state.skeletonData.simplifiedSegments;
+          const simplifiedLineMat = new THREE.LineBasicMaterial({
+            color: 0x374151,
+            linewidth: 3.5
+          });
+          for (const seg of segmentsToDraw) {
+            const linePts = [
+              new THREE.Vector3(seg.start.x, seg.start.y, 0.035),
+              new THREE.Vector3(seg.end.x, seg.end.y, 0.035)
+            ];
+            const geom = new THREE.BufferGeometry().setFromPoints(linePts);
+            const line = new THREE.Line(geom, simplifiedLineMat);
+            line.raycast = function() {};
+            meshesGroup.add(line);
+          }
+        } else {
+          const samples = state.samplesPerEdge;
+          const curveMat = new THREE.LineBasicMaterial({
+            color: 0x6b7280,
+            transparent: true,
+            opacity: 0.65,
+            linewidth: 1.5
+          });
+          for (let i = 0; i < state.polygon.length; i++) {
+            const pointsVec3 = [];
+            for (let j = 0; j < samples; j++) {
+              const idx = i * samples + j;
+              if (pts[idx]) {
+                pointsVec3.push(new THREE.Vector3(pts[idx].x, pts[idx].y, 0.025));
+              }
+            }
+            if (pointsVec3.length >= 2) {
+              const curveGeom = new THREE.BufferGeometry().setFromPoints(pointsVec3);
+              const line = new THREE.Line(curveGeom, curveMat);
+              line.raycast = function() {};
+              meshesGroup.add(line);
+            }
+          }
+          const regularBeadGeom = new THREE.CircleGeometry(0.12, 16);
+          const regularBeadMat = new THREE.MeshBasicMaterial({ color: 0x6b7280 });
+          for (const p of pts) {
+            const bead = new THREE.Mesh(regularBeadGeom, regularBeadMat);
+            bead.position.set(p.x, p.y, 0.03);
+            bead.raycast = function() {};
+            meshesGroup.add(bead);
           }
         }
-        if (pointsVec3.length >= 2) {
-          const curveGeom = new THREE.BufferGeometry().setFromPoints(pointsVec3);
-          const line = new THREE.Line(curveGeom, curveMat);
-          line.raycast = function() {};
-          meshesGroup.add(line);
+
+        // Valence 3+ Nodes
+        let nodesToDraw = state.simplifySkeleton ? state.skeletonData.simplifiedNodes : state.skeletonData.junctionPoints;
+        if (state.pruneBranches) {
+          nodesToDraw = nodesToDraw.filter(p => !p.isEndPoint);
         }
-      }
+        for (const jp of nodesToDraw) {
+          const rad = jp.isEndPoint ? 0.3 : 0.45;
+          const nodeGeom = new THREE.CircleGeometry(rad, 32);
+          const nodeMat = new THREE.MeshBasicMaterial({ color: jp.isEndPoint ? 0x4b5563 : 0x374151 });
+          const nodeMesh = new THREE.Mesh(nodeGeom, nodeMat);
+          nodeMesh.position.set(jp.x, jp.y, 0.035);
+          nodeMesh.raycast = function() {};
+          meshesGroup.add(nodeMesh);
 
-      // Small beads along standard curves (discs instead of 3D spheres)
-      const regularBeadGeom = new THREE.CircleGeometry(0.12, 16);
-      const regularBeadMat = new THREE.MeshBasicMaterial({ color: 0x6b7280 });
-      for (const p of pts) {
-        const bead = new THREE.Mesh(regularBeadGeom, regularBeadMat);
-        bead.position.set(p.x, p.y, 0.03);
-        bead.raycast = function() {};
-        meshesGroup.add(bead);
-      }
-    }
-
-    // Draw valence 3+ Junction/End node discs
-    let nodesToDraw = state.simplifySkeleton 
-      ? state.skeletonData.simplifiedNodes 
-      : state.skeletonData.junctionPoints;
-
-    if (state.pruneBranches) {
-      nodesToDraw = nodesToDraw.filter(p => !p.isEndPoint);
-    }
-
-    for (const jp of nodesToDraw) {
-      const rad = jp.isEndPoint ? 0.3 : 0.45; // Meter radius (smaller black circles)
-      const nodeGeom = new THREE.CircleGeometry(rad, 32);
-      const nodeMat = new THREE.MeshBasicMaterial({
-        color: jp.isEndPoint ? 0x4b5563 : 0x374151
-      });
-      const nodeMesh = new THREE.Mesh(nodeGeom, nodeMat);
-      nodeMesh.position.set(jp.x, jp.y, 0.035);
-      nodeMesh.raycast = function() {};
-      meshesGroup.add(nodeMesh);
-
-      // Concentric flat dashed (dotted) circle helper around nodes
-      const circlePts = [];
-      const segments = 32;
-      const circleRadius = rad * 1.65;
-      for (let s = 0; s <= segments; s++) {
-        const theta = (s / segments) * Math.PI * 2;
-        circlePts.push(new THREE.Vector3(jp.x + Math.cos(theta) * circleRadius, jp.y + Math.sin(theta) * circleRadius, 0.035));
-      }
-      const ringGeom = new THREE.BufferGeometry().setFromPoints(circlePts);
-      const ringMat = new THREE.LineDashedMaterial({
-        color: jp.isEndPoint ? 0x4b5563 : 0x374151,
-        transparent: true,
-        opacity: 0.4,
-        dashSize: 0.15,
-        gapSize: 0.1
-      });
-      const ringLine = new THREE.Line(ringGeom, ringMat);
-      ringLine.computeLineDistances();
-      ringLine.raycast = function() {};
-      meshesGroup.add(ringLine);
-    }
-
-    // Render Structural Ribs dropping columns to boundary
-    if (state.showRibs) {
-      const acceptedRibs = computeAcceptedRibs();
-      appContext.acceptedRibsCache = acceptedRibs; // Cache for 3DM export
-
-      const beadGeom = new THREE.CircleGeometry(0.15, 16);
-      const beadMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); // White spine division discs
-
-      const ribMat = new THREE.LineBasicMaterial({
-        color: 0x4b5563, // Slate grey rib vector lines
-        transparent: true,
-        opacity: 0.65
-      });
-
-      const contactGeom = new THREE.CircleGeometry(0.2, 16);
-      const contactMat = new THREE.MeshBasicMaterial({ color: 0x4b5563 });
-
-      // Draw spine beads
-      for (const rib of acceptedRibs) {
-        const bead = new THREE.Mesh(beadGeom, beadMat);
-        bead.position.set(rib.source.x, rib.source.y, 0.038);
-        bead.raycast = function() {};
-        meshesGroup.add(bead);
-      }
-
-      // Draw all accepted ribs
-      for (const rib of acceptedRibs) {
-        const rPts = [
-          new THREE.Vector3(rib.source.x, rib.source.y, 0.038),
-          new THREE.Vector3(rib.target.x, rib.target.y, 0.038)
-        ];
-        const rGeom = new THREE.BufferGeometry().setFromPoints(rPts);
-        const rLine = new THREE.Line(rGeom, ribMat);
-        rLine.raycast = function() {};
-        meshesGroup.add(rLine);
-
-        const contactMesh = new THREE.Mesh(contactGeom, contactMat);
-        contactMesh.position.set(rib.target.x, rib.target.y, 0.038);
-        contactMesh.raycast = function() {};
-        meshesGroup.add(contactMesh);
-      }
-    }
-  }
-
-  if (state.hoverCircle && state.hoveredMedialPoint && state.polygon.length >= 3) {
-    const hp = state.hoveredMedialPoint;
-    const rad = hp.radius;
-
-    // Outer flat ring outline
-    const ringGeom = new THREE.RingGeometry(rad - 0.2, rad + 0.2, 64); // Thinner outline in meters
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x374151, // Dark Slate Grey
-      transparent: true,
-      opacity: 0.82,
-      side: THREE.DoubleSide
-    });
-    const ring = new THREE.Mesh(ringGeom, ringMat);
-    ring.position.set(hp.x, hp.y, 0.045);
-    meshesGroup.add(ring);
-
-    // Soft colored transparent interior glow disc
-    const discGeom = new THREE.CircleGeometry(rad, 64);
-    const discMat = new THREE.MeshBasicMaterial({
-      color: 0x374151,
-      transparent: true,
-      opacity: 0.05,
-      side: THREE.DoubleSide,
-      depthWrite: false
-    });
-    const disc = new THREE.Mesh(discGeom, discMat);
-    disc.position.set(hp.x, hp.y, 0.04);
-    meshesGroup.add(disc);
-
-    // Glowing core center disc (scaled down for meters)
-    const centerGeom = new THREE.CircleGeometry(0.6, 16);
-    const centerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const centerMesh = new THREE.Mesh(centerGeom, centerMat);
-    centerMesh.position.set(hp.x, hp.y, 0.048);
-    meshesGroup.add(centerMesh);
-
-    // Governors tangency line indicators
-    if (state.showGovernors) {
-      const govLineMat = new THREE.LineBasicMaterial({
-        color: 0x4b5563, // Slate Grey
-        linewidth: 1.5
-      });
-      const govSphGeom = new THREE.CircleGeometry(0.5, 16); // Scaled down for meters
-      const govSphMat = new THREE.MeshBasicMaterial({ color: 0x4b5563 });
-
-      for (let i = 0; i < state.polygon.length; i++) {
-        const v1 = state.polygon[i];
-        const v2 = state.polygon[(i + 1) % state.polygon.length];
-        const cp = closestPointOnSegment(hp, v1, v2);
-
-        if (Math.abs(hp.dist(cp) - rad) < 0.2) {
-          const govPts = [
-            new THREE.Vector3(hp.x, hp.y, 0.046),
-            new THREE.Vector3(cp.x, cp.y, 0.046)
-          ];
-          const govGeom = new THREE.BufferGeometry().setFromPoints(govPts);
-          const govLine = new THREE.Line(govGeom, govLineMat);
-          meshesGroup.add(govLine);
-
-          const govMesh = new THREE.Mesh(govSphGeom, govSphMat);
-          govMesh.position.set(cp.x, cp.y, 0.046);
-          meshesGroup.add(govMesh);
-        }
-      }
-    }
-  }
-
-  // Render Enclosed Cells / Structural Bays
-  if (state.showBays && state.structuralBays && state.structuralBays.length > 0) {
-    state.structuralBays.forEach((cell, idx) => {
-      if (cell.length >= 3) {
-        // Create 2D Shape
-        const cellShape = new THREE.Shape();
-        cellShape.moveTo(cell[0].x, cell[0].y);
-        for (let k = 1; k < cell.length; k++) {
-          cellShape.lineTo(cell[k].x, cell[k].y);
-        }
-        cellShape.closePath();
-
-        const isSelected = state.selectedBayIndices.includes(idx);
-        
-        // Muted pastel HSL colors, or highlight orange if selected
-        const colorVal = isSelected 
-          ? new THREE.Color('hsl(25, 95%, 55%)')
-          : new THREE.Color(`hsl(${(idx * 137.5) % 360}, 45%, 60%)`);
-        const opacityVal = isSelected ? 0.45 : 0.15;
-
-        const bayGeom = new THREE.ShapeGeometry(cellShape);
-        const bayMat = new THREE.MeshBasicMaterial({
-          color: colorVal,
-          transparent: true,
-          opacity: opacityVal,
-          side: THREE.DoubleSide,
-          depthWrite: false
-        });
-        const bayMesh = new THREE.Mesh(bayGeom, bayMat);
-        bayMesh.position.z = 0.015; // Raised slightly above boundary grid
-        meshesGroup.add(bayMesh);
-
-        // Sub-divided boundary outlines for each cell (clean dark thin dashed lines, or solid orange if selected)
-        const cellPts = cell.map(p => new THREE.Vector3(p.x, p.y, 0.018));
-        cellPts.push(cellPts[0]); // Close loop
-        const outlineGeom = new THREE.BufferGeometry().setFromPoints(cellPts);
-        
-        let outlineLine;
-        if (isSelected) {
-          const outlineMat = new THREE.LineBasicMaterial({
-            color: 0xe65100, // Rich Dark Orange
-            linewidth: 2.5
-          });
-          outlineLine = new THREE.Line(outlineGeom, outlineMat);
-        } else {
-          const outlineMat = new THREE.LineDashedMaterial({
-            color: 0x4b5563, // Slate Grey
+          const circlePts = [];
+          const segments = 32;
+          const circleRadius = rad * 1.65;
+          for (let s = 0; s <= segments; s++) {
+            const theta = (s / segments) * Math.PI * 2;
+            circlePts.push(new THREE.Vector3(jp.x + Math.cos(theta) * circleRadius, jp.y + Math.sin(theta) * circleRadius, 0.035));
+          }
+          const ringGeom = new THREE.BufferGeometry().setFromPoints(circlePts);
+          const ringMat = new THREE.LineDashedMaterial({
+            color: jp.isEndPoint ? 0x4b5563 : 0x374151,
             transparent: true,
-            opacity: 0.35,
-            dashSize: 0.2,
-            gapSize: 0.15
+            opacity: 0.4,
+            dashSize: 0.15,
+            gapSize: 0.1
           });
-          outlineLine = new THREE.Line(outlineGeom, outlineMat);
-          outlineLine.computeLineDistances();
+          const ringLine = new THREE.Line(ringGeom, ringMat);
+          ringLine.computeLineDistances();
+          ringLine.raycast = function() {};
+          meshesGroup.add(ringLine);
         }
-        meshesGroup.add(outlineLine);
+
+        // Structural Ribs
+        if (state.showRibs) {
+          const acceptedRibs = computeAcceptedRibs();
+          if (isSelfActive) appContext.acceptedRibsCache = acceptedRibs;
+          const beadGeom = new THREE.CircleGeometry(0.15, 16);
+          const beadMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+          const ribMat = new THREE.LineBasicMaterial({ color: 0x4b5563, transparent: true, opacity: 0.65 });
+          const contactGeom = new THREE.CircleGeometry(0.2, 16);
+          const contactMat = new THREE.MeshBasicMaterial({ color: 0x4b5563 });
+          for (const rib of acceptedRibs) {
+            const bead = new THREE.Mesh(beadGeom, beadMat);
+            bead.position.set(rib.source.x, rib.source.y, 0.038);
+            bead.raycast = function() {};
+            meshesGroup.add(bead);
+
+            const rPts = [
+              new THREE.Vector3(rib.source.x, rib.source.y, 0.038),
+              new THREE.Vector3(rib.target.x, rib.target.y, 0.038)
+            ];
+            const rGeom = new THREE.BufferGeometry().setFromPoints(rPts);
+            const rLine = new THREE.Line(rGeom, ribMat);
+            rLine.raycast = function() {};
+            meshesGroup.add(rLine);
+
+            const contactMesh = new THREE.Mesh(contactGeom, contactMat);
+            contactMesh.position.set(rib.target.x, rib.target.y, 0.038);
+            contactMesh.raycast = function() {};
+            meshesGroup.add(contactMesh);
+          }
+        }
       }
-    });
-  }
 
-  // 6. Interactive Polygon Vertices Drag Handles (Chrome Indigo Discs - Scaled down for meters)
-  if (!state.isDrawing && !state.editBaysMode && state.polygon.length > 0) {
-    const handleGeom = new THREE.CircleGeometry(1.0, 32);
-    const coreGeom = new THREE.CircleGeometry(0.3, 16);
-    const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      // 5. Draw Bays
+      if (state.showBays && state.structuralBays && state.structuralBays.length > 0) {
+        state.structuralBays.forEach((cell, idx) => {
+          if (cell.length >= 3) {
+            const cellShape = new THREE.Shape();
+            cellShape.moveTo(cell[0].x, cell[0].y);
+            for (let k = 1; k < cell.length; k++) {
+              cellShape.lineTo(cell[k].x, cell[k].y);
+            }
+            cellShape.closePath();
 
-    for (let i = 0; i < state.polygon.length; i++) {
-      const v = state.polygon[i];
-      const isSelected = (state.selectedVertexType === 'polygon' && state.selectedVertexIdx === i);
-      const handleMat = new THREE.MeshBasicMaterial({
-        color: isSelected ? 0x10b981 : 0x374151, // Green if selected, Slate Grey otherwise
+            const isSelected = isSelfActive && state.selectedBayIndices.includes(idx);
+            const colorVal = isSelected 
+              ? new THREE.Color('hsl(25, 95%, 55%)')
+              : new THREE.Color(`hsl(${(idx * 137.5) % 360}, 45%, 60%)`);
+            const opacityVal = isSelected ? 0.45 : 0.15;
+
+            const bayGeom = new THREE.ShapeGeometry(cellShape);
+            const bayMat = new THREE.MeshBasicMaterial({
+              color: colorVal,
+              transparent: true,
+              opacity: opacityVal,
+              side: THREE.DoubleSide,
+              depthWrite: false
+            });
+            const bayMesh = new THREE.Mesh(bayGeom, bayMat);
+            bayMesh.position.z = 0.015;
+            meshesGroup.add(bayMesh);
+
+            const cellPts = cell.map(p => new THREE.Vector3(p.x, p.y, 0.018));
+            cellPts.push(cellPts[0]);
+            const outlineGeom = new THREE.BufferGeometry().setFromPoints(cellPts);
+            let outlineLine;
+            if (isSelected) {
+              const outlineMat = new THREE.LineBasicMaterial({ color: 0xe65100, linewidth: 2.5 });
+              outlineLine = new THREE.Line(outlineGeom, outlineMat);
+            } else {
+              const outlineMat = new THREE.LineDashedMaterial({
+                color: 0x4b5563,
+                transparent: true,
+                opacity: 0.35,
+                dashSize: 0.2,
+                gapSize: 0.15
+              });
+              outlineLine = new THREE.Line(outlineGeom, outlineMat);
+              outlineLine.computeLineDistances();
+            }
+            meshesGroup.add(outlineLine);
+          }
+        });
+      }
+    }
+
+    // 6. Draw Handles ONLY for active selected polygon
+    if (isSelfActive && !state.isDrawing && state.polygon.length > 0) {
+      if (!state.editBaysMode) {
+        const handleGeom = new THREE.CircleGeometry(1.0, 32);
+        const coreGeom = new THREE.CircleGeometry(0.3, 16);
+        const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        for (let i = 0; i < state.polygon.length; i++) {
+          const v = state.polygon[i];
+          const isSelected = (state.selectedVertexType === 'polygon' && state.selectedVertexIdx === i);
+          const handleMat = new THREE.MeshBasicMaterial({ color: isSelected ? 0x10b981 : 0x374151 });
+          const handle = new THREE.Mesh(handleGeom, handleMat);
+          handle.position.set(v.x, v.y, 0.03);
+          handle.userData = { isHandle: true, index: i, polygonId: item.id };
+          meshesGroup.add(handle);
+
+          const core = new THREE.Mesh(coreGeom, coreMat);
+          core.position.set(v.x, v.y, 0.038);
+          meshesGroup.add(core);
+        }
+      } else if (state.showBays && state.planarGraph) {
+        const edgeMat = new THREE.LineBasicMaterial({ color: 0x4f46e5, linewidth: 3.5, transparent: true, opacity: 0.8 });
+        state.planarGraph.edges.forEach((edge, idx) => {
+          const u = edge[0];
+          const v = edge[1];
+          const ptU = state.planarGraph.vertices[u];
+          const ptV = state.planarGraph.vertices[v];
+          if (ptU && ptV) {
+            const edgePts = [new THREE.Vector3(ptU.x, ptU.y, 0.032), new THREE.Vector3(ptV.x, ptV.y, 0.032)];
+            const geom = new THREE.BufferGeometry().setFromPoints(edgePts);
+            const line = new THREE.Line(geom, edgeMat);
+            line.userData = { index: idx, u, v, polygonId: item.id };
+            meshesGroup.add(line);
+          }
+        });
+
+        const vertexGeom = new THREE.CircleGeometry(0.7, 32);
+        const innerGeom = new THREE.CircleGeometry(0.25, 16);
+        const innerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        state.planarGraph.vertices.forEach((v, i) => {
+          const isSelected = (state.selectedVertexType === 'graph' && state.selectedVertexIdx === i);
+          const vertexMat = new THREE.MeshBasicMaterial({ color: isSelected ? 0x10b981 : 0x4f46e5, transparent: true, opacity: 0.95 });
+          const vMesh = new THREE.Mesh(vertexGeom, vertexMat);
+          vMesh.position.set(v.x, v.y, 0.035);
+          vMesh.userData = { isGraphVertex: true, index: i, polygonId: item.id };
+          meshesGroup.add(vMesh);
+
+          const innerMesh = new THREE.Mesh(innerGeom, innerMat);
+          innerMesh.position.set(v.x, v.y, 0.039);
+          meshesGroup.add(innerMesh);
+        });
+      }
+    }
+  });
+
+  // Restore active selected id
+  state.activePolygonId = originalActiveId;
+
+  // Render Hover maximal inscribed circle helper for active selected polygon
+  const activePoly = state.importedPolygons.find(p => p.id === state.activePolygonId);
+  if (activePoly) {
+    state.activePolygonId = activePoly.id;
+    if (state.hoverCircle && state.hoveredMedialPoint && state.polygon.length >= 3) {
+      const hp = state.hoveredMedialPoint;
+      const rad = hp.radius;
+      const ringGeom = new THREE.RingGeometry(rad - 0.2, rad + 0.2, 64);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0x374151,
+        transparent: true,
+        opacity: 0.82,
+        side: THREE.DoubleSide
       });
+      const ring = new THREE.Mesh(ringGeom, ringMat);
+      ring.position.set(hp.x, hp.y, 0.045);
+      meshesGroup.add(ring);
 
-      const handle = new THREE.Mesh(handleGeom, handleMat);
-      handle.position.set(v.x, v.y, 0.03);
-      handle.userData = { isHandle: true, index: i }; // Raycast tag
-      meshesGroup.add(handle);
+      const discGeom = new THREE.CircleGeometry(rad, 64);
+      const discMat = new THREE.MeshBasicMaterial({ color: 0x374151, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false });
+      const disc = new THREE.Mesh(discGeom, discMat);
+      disc.position.set(hp.x, hp.y, 0.04);
+      meshesGroup.add(disc);
 
-      // Embedded white core
-      const core = new THREE.Mesh(coreGeom, coreMat);
-      core.position.set(v.x, v.y, 0.038);
-      meshesGroup.add(core);
+      const centerGeom = new THREE.CircleGeometry(0.6, 16);
+      const centerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const centerMesh = new THREE.Mesh(centerGeom, centerMat);
+      centerMesh.position.set(hp.x, hp.y, 0.048);
+      meshesGroup.add(centerMesh);
+
+      if (state.showGovernors) {
+        const govLineMat = new THREE.LineBasicMaterial({ color: 0x4b5563, linewidth: 1.5 });
+        const govSphGeom = new THREE.CircleGeometry(0.5, 16);
+        const govSphMat = new THREE.MeshBasicMaterial({ color: 0x4b5563 });
+        for (let i = 0; i < state.polygon.length; i++) {
+          const v1 = state.polygon[i];
+          const v2 = state.polygon[(i + 1) % state.polygon.length];
+          const cp = closestPointOnSegment(hp, v1, v2);
+          if (Math.abs(hp.dist(cp) - rad) < 0.2) {
+            const govPts = [new THREE.Vector3(hp.x, hp.y, 0.046), new THREE.Vector3(cp.x, cp.y, 0.046)];
+            const govGeom = new THREE.BufferGeometry().setFromPoints(govPts);
+            const govLine = new THREE.Line(govGeom, govLineMat);
+            meshesGroup.add(govLine);
+
+            const govMesh = new THREE.Mesh(govSphGeom, govSphMat);
+            govMesh.position.set(cp.x, cp.y, 0.046);
+            meshesGroup.add(govMesh);
+          }
+        }
+      }
     }
   }
 
-  // 7. Interactive Graph Vertices and Edges Drag Handles in Edit Bays Mode
-  if (!state.isDrawing && state.editBaysMode && state.showBays && state.planarGraph) {
-    // A. Render selectable Graph Edges
-    const edgeMat = new THREE.LineBasicMaterial({
-      color: 0x4f46e5, // Elegant indigo color
-      linewidth: 3.5,
-      transparent: true,
-      opacity: 0.8
-    });
-    
-    state.planarGraph.edges.forEach((edge, idx) => {
-      const u = edge[0];
-      const v = edge[1];
-      const ptU = state.planarGraph.vertices[u];
-      const ptV = state.planarGraph.vertices[v];
-      if (ptU && ptV) {
-        const edgePts = [
-          new THREE.Vector3(ptU.x, ptU.y, 0.032),
-          new THREE.Vector3(ptV.x, ptV.y, 0.032)
-        ];
-        const geom = new THREE.BufferGeometry().setFromPoints(edgePts);
-        const line = new THREE.Line(geom, edgeMat);
-        line.userData = { index: idx, u, v };
-        meshesGroup.add(line);
-      }
-    });
-
-    // B. Render draggable Graph Vertices
-    const vertexGeom = new THREE.CircleGeometry(0.7, 32); // 0.7m radius handle
-    const innerGeom = new THREE.CircleGeometry(0.25, 16);
-    const innerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-
-    state.planarGraph.vertices.forEach((v, i) => {
-      const isSelected = (state.selectedVertexType === 'graph' && state.selectedVertexIdx === i);
-      const vertexMat = new THREE.MeshBasicMaterial({
-        color: isSelected ? 0x10b981 : 0x4f46e5, // Green if selected, Indigo otherwise
-        transparent: true,
-        opacity: 0.95
-      });
-      
-      const vMesh = new THREE.Mesh(vertexGeom, vertexMat);
-      vMesh.position.set(v.x, v.y, 0.035);
-      vMesh.userData = { isGraphVertex: true, index: i };
-      meshesGroup.add(vMesh);
-
-      // Embedded white inner core
-      const innerMesh = new THREE.Mesh(innerGeom, innerMat);
-      innerMesh.position.set(v.x, v.y, 0.039);
-      meshesGroup.add(innerMesh);
-    });
-  }
+  // Restore active selected id
+  state.activePolygonId = originalActiveId;
 
   // Update manipulator target position to match selection
   if (transformControls && transformControls.object) {
@@ -1584,13 +1672,296 @@ function draw() {
       const v = state.planarGraph.vertices[state.selectedVertexIdx];
       manipulatorTarget.position.set(v.x, v.y, 0.035);
     } else {
-      // Detach if selection is no longer valid
       transformControls.detach();
       state.selectedVertexType = null;
       state.selectedVertexIdx = -1;
       state.selectedVertexOrig = null;
     }
   }
+
+  build3DStack();
+}
+
+function build3DStack() {
+  if (!stack3DGroup) return;
+
+  // Clear previous meshes safely
+  while (stack3DGroup.children.length > 0) {
+    const child = stack3DGroup.children[0];
+    stack3DGroup.remove(child);
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m.dispose());
+      } else {
+        child.material.dispose();
+      }
+    }
+  }
+
+  const numFloors = state.numFloors;
+  const floorHeight = state.floorHeight;
+
+  // Materials
+  const slabMat = new THREE.MeshStandardMaterial({ color: 0xe5e7eb, roughness: 0.85, metalness: 0.1 });
+  const columnMat = new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.5, metalness: 0.6 });
+  const beamMat = new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.6, metalness: 0.4 });
+  const balconySlabMat = new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.8, metalness: 0.2 });
+  const railingMat = new THREE.MeshStandardMaterial({ color: 0x0d9488, transparent: true, opacity: 0.4, roughness: 0.1, metalness: 0.1, side: THREE.DoubleSide });
+  const louverMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.7, metalness: 0.0 });
+  const vaultMat = new THREE.MeshStandardMaterial({ color: 0xf3f4f6, roughness: 0.8, metalness: 0.1, side: THREE.DoubleSide });
+  const vaultWireframeMat = new THREE.MeshBasicMaterial({
+    color: 0x374151,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.3,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  });
+
+  const originalActiveId = state.activePolygonId;
+
+  // Loop through all imported polygons with active scaffold
+  state.importedPolygons.forEach(item => {
+    if (!item.hasScaffold || item.polygon.length < 3) return;
+
+    // Temporarily set active id so getters resolve to this item
+    state.activePolygonId = item.id;
+
+    let isCCW = true;
+    let area = 0;
+    for (let j = 0; j < state.polygon.length; j++) {
+      const p1 = state.polygon[j];
+      const p2 = state.polygon[(j + 1) % state.polygon.length];
+      area += (p1.x * p2.y - p2.x * p1.y);
+    }
+    isCCW = area > 0;
+
+    const boundaryNormals = [];
+    for (let j = 0; j < state.polygon.length; j++) {
+      const p1 = state.polygon[j];
+      const p2 = state.polygon[(j + 1) % state.polygon.length];
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const len = Math.hypot(dx, dy);
+      let nx = 0, ny = 0;
+      if (len > 1e-6) {
+        if (isCCW) {
+          nx = dy / len;
+          ny = -dx / len;
+        } else {
+          nx = -dy / len;
+          ny = dx / len;
+        }
+      }
+      boundaryNormals.push({ x: nx, y: ny, length: len });
+    }
+
+    const slabShape = new THREE.Shape();
+    slabShape.moveTo(state.polygon[0].x, state.polygon[0].y);
+    for (let j = 1; j < state.polygon.length; j++) {
+      slabShape.lineTo(state.polygon[j].x, state.polygon[j].y);
+    }
+    slabShape.closePath();
+    const slabGeom = new THREE.ExtrudeGeometry(slabShape, { depth: state.slabThickness, bevelEnabled: false });
+
+    const vertices = state.planarGraph ? state.planarGraph.vertices : state.polygon;
+    const edges = [];
+    if (state.planarGraph) {
+      state.planarGraph.edges.forEach(edge => {
+        const ptU = state.planarGraph.vertices[edge[0]];
+        const ptV = state.planarGraph.vertices[edge[1]];
+        edges.push([ptU, ptV]);
+      });
+    } else {
+      for (let j = 0; j < state.polygon.length; j++) {
+        edges.push([state.polygon[j], state.polygon[(j + 1) % state.polygon.length]]);
+      }
+    }
+
+    const colHeight = floorHeight - state.slabThickness;
+    const colGeom = new THREE.CylinderGeometry(state.columnRadius, state.columnRadius, colHeight, 16);
+    colGeom.rotateX(Math.PI / 2);
+
+    for (let i = 0; i < numFloors; i++) {
+      const zFloor = i * floorHeight;
+
+      if (state.showFloorSlabs) {
+        const slabMesh = new THREE.Mesh(slabGeom, slabMat);
+        slabMesh.position.z = zFloor - state.slabThickness;
+        slabMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+        stack3DGroup.add(slabMesh);
+      }
+
+      if (state.show3DColumns) {
+        vertices.forEach(v => {
+          const colMesh = new THREE.Mesh(colGeom, columnMat);
+          colMesh.position.set(v.x, v.y, zFloor + colHeight / 2);
+          colMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+          stack3DGroup.add(colMesh);
+        });
+      }
+
+      if (state.show3DBeams) {
+        edges.forEach(([ptU, ptV]) => {
+          const dx = ptV.x - ptU.x;
+          const dy = ptV.y - ptU.y;
+          const len = Math.hypot(dx, dy);
+          if (len < 1e-3) return;
+
+          const beamGeom = new THREE.BoxGeometry(len, state.beamWidth, state.beamDepth);
+          const beamMesh = new THREE.Mesh(beamGeom, beamMat);
+          const midX = (ptU.x + ptV.x) / 2;
+          const midY = (ptU.y + ptV.y) / 2;
+          const midZ = zFloor - state.slabThickness - state.beamDepth / 2;
+          beamMesh.position.set(midX, midY, midZ);
+          beamMesh.rotation.z = Math.atan2(dy, dx);
+          beamMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+          stack3DGroup.add(beamMesh);
+        });
+      }
+
+      if (state.showBalconies) {
+        for (let j = 0; j < state.polygon.length; j++) {
+          const p1 = state.polygon[j];
+          const p2 = state.polygon[(j + 1) % state.polygon.length];
+          const normal = boundaryNormals[j];
+          const len = normal.length;
+          if (len < 1e-3) continue;
+
+          const balGeom = new THREE.BoxGeometry(len, state.balconyOffset, state.balconyThickness);
+          const balMesh = new THREE.Mesh(balGeom, balconySlabMat);
+          const midX = (p1.x + p2.x) / 2 + normal.x * (state.balconyOffset / 2);
+          const midY = (p1.y + p2.y) / 2 + normal.y * (state.balconyOffset / 2);
+          const midZ = zFloor - state.balconyThickness / 2;
+          balMesh.position.set(midX, midY, midZ);
+          balMesh.rotation.z = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+          balMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+          stack3DGroup.add(balMesh);
+
+          const railingHeight = 1.1;
+          const railingThick = 0.02;
+          const railGeom = new THREE.BoxGeometry(len, railingThick, railingHeight);
+          const railMesh = new THREE.Mesh(railGeom, railingMat);
+          const railX = (p1.x + p2.x) / 2 + normal.x * state.balconyOffset;
+          const railY = (p1.y + p2.y) / 2 + normal.y * state.balconyOffset;
+          const railZ = zFloor + railingHeight / 2;
+          railMesh.position.set(railX, railY, railZ);
+          railMesh.rotation.z = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+          railMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+          stack3DGroup.add(railMesh);
+        }
+      }
+
+      if (state.showBriseSoleil) {
+        for (let j = 0; j < state.polygon.length; j++) {
+          const p1 = state.polygon[j];
+          const p2 = state.polygon[(j + 1) % state.polygon.length];
+          const normal = boundaryNormals[j];
+          const len = normal.length;
+          if (len < 1e-3) continue;
+
+          const spacing = state.louverSpacing;
+          const numLouvers = Math.max(2, Math.floor(len / spacing));
+          const lHeight = floorHeight - state.slabThickness;
+          const louverGeom = new THREE.BoxGeometry(state.louverWidth, state.louverDepth, lHeight);
+
+          for (let k = 0; k <= numLouvers; k++) {
+            const t = k / numLouvers;
+            const lx = p1.x + (p2.x - p1.x) * t + normal.x * 0.15;
+            const ly = p1.y + (p2.y - p1.y) * t + normal.y * 0.15;
+            const lz = zFloor + lHeight / 2;
+
+            const lMesh = new THREE.Mesh(louverGeom, louverMat);
+            lMesh.position.set(lx, ly, lz);
+            lMesh.rotation.z = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+            lMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+            stack3DGroup.add(lMesh);
+          }
+        }
+      }
+    }
+
+    if (state.showVaultedRoofs && state.structuralBays && state.structuralBays.length > 0) {
+      const zTop = (numFloors - 1) * floorHeight;
+      const M = 8;
+
+      state.structuralBays.forEach((cell) => {
+        if (cell.length < 3) return;
+
+        const centroid = getCentroid(cell);
+        let sumDist = 0;
+        cell.forEach(pt => { sumDist += Math.hypot(pt.x - centroid.x, pt.y - centroid.y); });
+        const R_avg = sumDist / cell.length;
+        if (R_avg < 1e-3) return;
+
+        const cellVertices = [];
+        const cellIndices = [];
+        let globalIdx = 0;
+
+        for (let j = 0; j < cell.length; j++) {
+          const p1 = cell[j];
+          const p2 = cell[(j + 1) % cell.length];
+
+          for (let u = 0; u <= M; u++) {
+            for (let v = 0; v <= u; v++) {
+              let bx = p1.x, by = p1.y;
+              if (u > 0) {
+                const tSeg = v / u;
+                bx = p1.x + (p2.x - p1.x) * tSeg;
+                by = p1.y + (p2.y - p1.y) * tSeg;
+              }
+              const tCent = u / M;
+              const x = centroid.x + (bx - centroid.x) * tCent;
+              const y = centroid.y + (by - centroid.y) * tCent;
+              const d = Math.hypot(x - centroid.x, y - centroid.y);
+              const heightFactor = Math.max(0, 1 - (d / R_avg) ** 2);
+              const z = zTop + state.vaultHeight * heightFactor;
+              cellVertices.push(x, y, z);
+            }
+          }
+
+          const getIdx = (u, v) => {
+            const rowStart = (u * (u + 1)) / 2;
+            return globalIdx + rowStart + v;
+          };
+
+          for (let u = 0; u < M; u++) {
+            for (let v = 0; v <= u; v++) {
+              const i1 = getIdx(u, v);
+              const i2 = getIdx(u + 1, v);
+              const i3 = getIdx(u + 1, v + 1);
+              cellIndices.push(i1, i2, i3);
+              if (v < u) {
+                const i4 = getIdx(u, v);
+                const i5 = getIdx(u + 1, v + 1);
+                const i6 = getIdx(u, v + 1);
+                cellIndices.push(i4, i5, i6);
+              }
+            }
+          }
+          globalIdx += ((M + 1) * (M + 2)) / 2;
+        }
+
+        const vaultGeom = new THREE.BufferGeometry();
+        vaultGeom.setAttribute('position', new THREE.Float32BufferAttribute(cellVertices, 3));
+        vaultGeom.setIndex(cellIndices);
+        vaultGeom.computeVertexNormals();
+
+        const vaultMesh = new THREE.Mesh(vaultGeom, vaultMat);
+        vaultMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+        stack3DGroup.add(vaultMesh);
+
+        const vaultWireMesh = new THREE.Mesh(vaultGeom, vaultWireframeMat);
+        vaultWireMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+        stack3DGroup.add(vaultWireMesh);
+      });
+    }
+  });
+
+  // Restore active selected id
+  state.activePolygonId = originalActiveId;
 }
 
 // Setup Event Listeners for UI
@@ -1632,6 +2003,15 @@ function setupEventListeners() {
   if (headerRhino && sectionRhino) {
     headerRhino.addEventListener('click', () => {
       sectionRhino.classList.toggle('collapsed');
+    });
+  }
+
+  // Collapsible 3D Structural Stack
+  const header3DStack = document.getElementById('header-3d-stack');
+  const section3DStack = document.getElementById('section-3d-stack');
+  if (header3DStack && section3DStack) {
+    header3DStack.addEventListener('click', () => {
+      section3DStack.classList.toggle('collapsed');
     });
   }
 
@@ -1847,6 +2227,8 @@ function setupEventListeners() {
 
   btnDrawCustom.addEventListener('click', () => {
     state.isDrawing = true;
+    state.importedPolygons = [];
+    state.activePolygonId = 'default';
     state.customVertices = [];
     state.polygon = [];
     state.graphVertexOverrides.clear();
@@ -1870,6 +2252,8 @@ function setupEventListeners() {
   });
 
   btnClearCustom.addEventListener('click', () => {
+    state.importedPolygons = [];
+    state.activePolygonId = 'default';
     state.customVertices = [];
     state.polygon = [];
     state.isDrawing = true;
@@ -1947,7 +2331,7 @@ function setupRhinoUIControls() {
             checkbox.type = 'checkbox';
             checkbox.id = `layer-chk-${layer.index}`;
             checkbox.value = layer.index;
-            checkbox.checked = layer.visible !== false;
+            checkbox.checked = false;
 
             const dot = document.createElement('div');
             dot.className = 'layer-color-dot';
@@ -2032,6 +2416,77 @@ function setupRhinoUIControls() {
       btnExport.textContent = "Export to 3DM";
     }
   });
+
+  // Slider - Number of Floors
+  const sFloors = document.getElementById('slider-floors');
+  const valFloors = document.getElementById('val-floors');
+  if (sFloors && valFloors) {
+    sFloors.addEventListener('input', (e) => {
+      state.numFloors = parseInt(e.target.value);
+      valFloors.innerText = state.numFloors;
+      draw();
+    });
+  }
+
+  // Slider - Floor Height
+  const sFloorHeight = document.getElementById('slider-floor-height');
+  const valFloorHeight = document.getElementById('val-floor-height');
+  if (sFloorHeight && valFloorHeight) {
+    sFloorHeight.addEventListener('input', (e) => {
+      state.floorHeight = parseFloat(e.target.value);
+      valFloorHeight.innerText = `${state.floorHeight.toFixed(1)}m`;
+      draw();
+    });
+  }
+
+  // Checkboxes
+  const chkColumns = document.getElementById('chk-3d-columns');
+  if (chkColumns) {
+    chkColumns.addEventListener('change', (e) => {
+      state.show3DColumns = e.target.checked;
+      draw();
+    });
+  }
+
+  const chkBeams = document.getElementById('chk-3d-beams');
+  if (chkBeams) {
+    chkBeams.addEventListener('change', (e) => {
+      state.show3DBeams = e.target.checked;
+      draw();
+    });
+  }
+
+  const chkSlabs = document.getElementById('chk-3d-slabs');
+  if (chkSlabs) {
+    chkSlabs.addEventListener('change', (e) => {
+      state.showFloorSlabs = e.target.checked;
+      draw();
+    });
+  }
+
+  const chkBalconies = document.getElementById('chk-3d-balconies');
+  if (chkBalconies) {
+    chkBalconies.addEventListener('change', (e) => {
+      state.showBalconies = e.target.checked;
+      draw();
+    });
+  }
+
+  const chkBriseSoleil = document.getElementById('chk-3d-brisesoleil');
+  if (chkBriseSoleil) {
+    chkBriseSoleil.addEventListener('change', (e) => {
+      state.showBriseSoleil = e.target.checked;
+      draw();
+    });
+  }
+
+  const chkVaults = document.getElementById('chk-3d-vaults');
+  if (chkVaults) {
+    chkVaults.addEventListener('change', (e) => {
+      state.showVaultedRoofs = e.target.checked;
+      draw();
+    });
+  }
 }
 
 // Mouse Event Handlers using 3D Raycasting
@@ -2047,30 +2502,30 @@ function getIntersectionPoint(e) {
 }
 
 function handleMouseDown(e) {
-  // Let OrbitControls handle Middle-click (dolly) and Right-click (pan) automatically
   if (e.button === 1 || e.button === 2) return;
 
   if (e.button === 0) {
-    // If the click is on the translator handles, let TransformControls handle it
     if (transformControls && (transformControls.dragging || transformControls.axis)) {
       return;
     }
 
+    const rect = canvas.getBoundingClientRect();
+    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    const target = getIntersectionPoint(e);
+    const worldPos = new Vector2D(target.x, target.y);
+
+    raycaster.setFromCamera(mouse, cameraActive);
+    raycaster.params.Line.threshold = 0.4;
+
+    const allChildren = [...meshesGroup.children, ...stack3DGroup.children];
+    const intersects = raycaster.intersectObjects(allChildren, true);
+
     if (state.editBaysMode) {
-      const target = getIntersectionPoint(e);
-      const worldPos = new Vector2D(target.x, target.y);
-      
-      const rect = canvas.getBoundingClientRect();
-      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      
-      raycaster.setFromCamera(mouse, cameraActive);
-      raycaster.params.Line.threshold = 0.4;
-      const intersects = raycaster.intersectObjects(meshesGroup.children);
-      
       let clickedGraphObject = false;
       for (const hit of intersects) {
-        if (hit.object.userData && hit.object.userData.isGraphVertex) {
+        if (hit.object.userData && hit.object.userData.isGraphVertex && hit.object.userData.polygonId === state.activePolygonId) {
           const idx = hit.object.userData.index;
           const v = state.planarGraph.vertices[idx];
           
@@ -2086,92 +2541,134 @@ function handleMouseDown(e) {
           break;
         }
       }
-      
+
       if (!clickedGraphObject) {
-        const clickedIdx = state.structuralBays.findIndex(bay => pointInPolygon(worldPos, bay));
-        if (clickedIdx !== -1) {
-          const selIdx = state.selectedBayIndices.indexOf(clickedIdx);
-          if (selIdx !== -1) {
-            state.selectedBayIndices.splice(selIdx, 1);
-          } else {
-            state.selectedBayIndices.push(clickedIdx);
+        let hitPolygonId = null;
+        let hitObject = null;
+        for (const hit of intersects) {
+          if (hit.object.userData && hit.object.userData.polygonId) {
+            hitPolygonId = hit.object.userData.polygonId;
+            hitObject = hit.object;
+            break;
           }
-          
-          const btnCombine = document.getElementById('btn-combine-bays');
-          const btnDelete = document.getElementById('btn-delete-bays');
-          if (btnCombine) btnCombine.disabled = state.selectedBayIndices.length < 2;
-          if (btnDelete) btnDelete.disabled = state.selectedBayIndices.length === 0;
         }
-        
-        // Clicked a bay or empty space: detach manipulator & reset selection state
-        transformControls.detach();
-        state.selectedVertexType = null;
-        state.selectedVertexIdx = -1;
-        state.selectedVertexOrig = null;
-        draw();
-      }
-      return; // Prevent vertex dragging/drawing while editing bays
-    }
 
-    const rect = canvas.getBoundingClientRect();
-    mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-    // Check if clicking near any vertex handle sphere
-    raycaster.setFromCamera(mouse, cameraActive);
-    const intersects = raycaster.intersectObjects(meshesGroup.children);
-    let clickedHandle = false;
-
-    for (const hit of intersects) {
-      if (hit.object.userData && hit.object.userData.isHandle) {
-        const idx = hit.object.userData.index;
-        const v = state.polygon[idx];
-        
-        state.selectedVertexType = 'polygon';
-        state.selectedVertexIdx = idx;
-        state.selectedVertexOrig = null;
-        
-        manipulatorTarget.position.set(v.x, v.y, 0.03);
-        transformControls.attach(manipulatorTarget);
-        
-        clickedHandle = true;
-        draw();
-        break;
-      }
-    }
-
-    if (!clickedHandle && !state.isDrawing) {
-      // Clicked empty space in normal mode
-      transformControls.detach();
-      state.selectedVertexType = null;
-      state.selectedVertexIdx = -1;
-      state.selectedVertexOrig = null;
-      draw();
-    }
-
-    if (state.isDrawing) {
-      const target = getIntersectionPoint(e);
-      const worldPos = new Vector2D(target.x, target.y);
-
-      // If clicking near the first vertex and we have at least 3 points, close it
-      if (state.customVertices.length >= 3) {
-        const screenFirst = worldToScreen(state.customVertices[0]);
-        const screenPos = new Vector2D(e.clientX - rect.left, e.clientY - rect.top);
-        if (screenPos.dist(screenFirst) < 12) {
-          state.polygon = [...state.customVertices];
-          state.isDrawing = false;
-          
-          document.getElementById('btn-draw-custom').style.display = 'inline-flex';
-          document.getElementById('btn-clear-custom').style.display = 'none';
-          document.getElementById('drawing-indicator').style.display = 'none';
-          
-          recomputeMAT();
-          resetCameraView();
-          return;
+        if (hitPolygonId) {
+          const polyItem = state.importedPolygons.find(p => p.id === hitPolygonId);
+          if (polyItem) {
+            if (!polyItem.hasScaffold) {
+              polyItem.hasScaffold = true;
+              state.activePolygonId = polyItem.id;
+              recomputeMAT();
+            } else {
+              if (hitObject.userData.isPolygonLine || hitObject.userData.is3DStackMesh) {
+                polyItem.hasScaffold = false;
+                recomputeMAT();
+              } else {
+                const clickedIdx = polyItem.structuralBays.findIndex(bay => pointInPolygon(worldPos, bay));
+                if (clickedIdx !== -1) {
+                  if (state.activePolygonId !== polyItem.id) {
+                    state.activePolygonId = polyItem.id;
+                    draw();
+                  }
+                  const selIdx = state.selectedBayIndices.indexOf(clickedIdx);
+                  if (selIdx !== -1) {
+                    state.selectedBayIndices.splice(selIdx, 1);
+                  } else {
+                    state.selectedBayIndices.push(clickedIdx);
+                  }
+                  
+                  const btnCombine = document.getElementById('btn-combine-bays');
+                  const btnDelete = document.getElementById('btn-delete-bays');
+                  if (btnCombine) btnCombine.disabled = state.selectedBayIndices.length < 2;
+                  if (btnDelete) btnDelete.disabled = state.selectedBayIndices.length === 0;
+                  draw();
+                } else {
+                  polyItem.hasScaffold = false;
+                  recomputeMAT();
+                }
+              }
+            }
+          }
+        } else {
+          transformControls.detach();
+          state.selectedVertexType = null;
+          state.selectedVertexIdx = -1;
+          state.selectedVertexOrig = null;
+          draw();
         }
       }
-      state.customVertices.push(worldPos);
-      draw();
+      return;
+    } else {
+      if (state.isDrawing) {
+        if (state.customVertices.length >= 3) {
+          const screenFirst = worldToScreen(state.customVertices[0]);
+          const screenPos = new Vector2D(e.clientX - rect.left, e.clientY - rect.top);
+          if (screenPos.dist(screenFirst) < 12) {
+            state.polygon = [...state.customVertices];
+            state.isDrawing = false;
+            
+            document.getElementById('btn-draw-custom').style.display = 'inline-flex';
+            document.getElementById('btn-clear-custom').style.display = 'none';
+            document.getElementById('drawing-indicator').style.display = 'none';
+            
+            recomputeMAT();
+            resetCameraView();
+            return;
+          }
+        }
+        state.customVertices.push(worldPos);
+        draw();
+      } else {
+        let clickedHandle = false;
+        for (const hit of intersects) {
+          if (hit.object.userData && hit.object.userData.isHandle && hit.object.userData.polygonId === state.activePolygonId) {
+            const idx = hit.object.userData.index;
+            const v = state.polygon[idx];
+            
+            state.selectedVertexType = 'polygon';
+            state.selectedVertexIdx = idx;
+            state.selectedVertexOrig = null;
+            
+            manipulatorTarget.position.set(v.x, v.y, 0.03);
+            transformControls.attach(manipulatorTarget);
+            
+            clickedHandle = true;
+            draw();
+            break;
+          }
+        }
+
+        if (!clickedHandle) {
+          let hitPolygonId = null;
+          for (const hit of intersects) {
+            if (hit.object.userData && hit.object.userData.polygonId) {
+              hitPolygonId = hit.object.userData.polygonId;
+              break;
+            }
+          }
+
+          if (hitPolygonId) {
+            const polyItem = state.importedPolygons.find(p => p.id === hitPolygonId);
+            if (polyItem) {
+              if (!polyItem.hasScaffold) {
+                polyItem.hasScaffold = true;
+                state.activePolygonId = polyItem.id;
+                recomputeMAT();
+              } else {
+                polyItem.hasScaffold = false;
+                recomputeMAT();
+              }
+            }
+          } else {
+            transformControls.detach();
+            state.selectedVertexType = null;
+            state.selectedVertexIdx = -1;
+            state.selectedVertexOrig = null;
+            draw();
+          }
+        }
+      }
     }
   }
 }

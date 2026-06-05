@@ -12,6 +12,275 @@ async function getRhino() {
     return rhino;
 }
 
+function createCylinderMesh(rhino, xc, yc, zStart, radius, height, segments = 12) {
+    const mesh = new rhino.Mesh();
+    const zEnd = zStart + height;
+    
+    mesh.vertices().add(xc, yc, zStart);
+    mesh.vertices().add(xc, yc, zEnd);
+    
+    for (let i = 0; i < segments; i++) {
+        const theta = (i / segments) * Math.PI * 2;
+        const dx = Math.cos(theta) * radius;
+        const dy = Math.sin(theta) * radius;
+        mesh.vertices().add(xc + dx, yc + dy, zStart);
+    }
+    for (let i = 0; i < segments; i++) {
+        const theta = (i / segments) * Math.PI * 2;
+        const dx = Math.cos(theta) * radius;
+        const dy = Math.sin(theta) * radius;
+        mesh.vertices().add(xc + dx, yc + dy, zEnd);
+    }
+    
+    const bCenter = 0;
+    const tCenter = 1;
+    const bRingStart = 2;
+    const tRingStart = 2 + segments;
+    
+    for (let i = 0; i < segments; i++) {
+        const next = (i + 1) % segments;
+        mesh.faces().addTriFace(bCenter, bRingStart + next, bRingStart + i);
+        mesh.faces().addTriFace(tCenter, tRingStart + i, tRingStart + next);
+        mesh.faces().addQuadFace(
+            bRingStart + i,
+            bRingStart + next,
+            tRingStart + next,
+            tRingStart + i
+        );
+    }
+    
+    return mesh;
+}
+
+function createBoxMesh(rhino, ax, ay, bx, by, width, depth, zTop, offsetX = 0, offsetY = 0) {
+    const mesh = new rhino.Mesh();
+    
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return mesh;
+    
+    const nx = dy / len;
+    const ny = -dx / len;
+    
+    const hW = width / 2;
+    const zBottom = zTop - depth;
+    
+    const pts = [
+        { x: ax - nx * hW + offsetX, y: ay - ny * hW + offsetY },
+        { x: ax + nx * hW + offsetX, y: ay + ny * hW + offsetY },
+        { x: bx + nx * hW + offsetX, y: by + ny * hW + offsetY },
+        { x: bx - nx * hW + offsetX, y: by - ny * hW + offsetY }
+    ];
+    
+    pts.forEach(p => mesh.vertices().add(p.x, p.y, zBottom));
+    pts.forEach(p => mesh.vertices().add(p.x, p.y, zTop));
+    
+    mesh.faces().addQuadFace(3, 2, 1, 0);
+    mesh.faces().addQuadFace(4, 5, 6, 7);
+    
+    mesh.faces().addQuadFace(0, 1, 5, 4);
+    mesh.faces().addQuadFace(1, 2, 6, 5);
+    mesh.faces().addQuadFace(2, 3, 7, 6);
+    mesh.faces().addQuadFace(3, 0, 4, 7);
+    
+    return mesh;
+}
+
+function triangulatePolygon(vertices) {
+    const triangles = [];
+    const pts = vertices.map((v, i) => ({ x: v[0], y: v[1], index: i }));
+    
+    const n = pts.length;
+    if (n < 3) return triangles;
+    
+    let area = 0;
+    for (let i = 0; i < n; i++) {
+        const p1 = pts[i];
+        const p2 = pts[(i + 1) % n];
+        area += (p1.x * p2.y - p2.x * p1.y);
+    }
+    const isCCW = area > 0;
+    
+    const indicesList = [];
+    if (isCCW) {
+        for (let i = 0; i < n; i++) indicesList.push(i);
+    } else {
+        for (let i = n - 1; i >= 0; i--) indicesList.push(i);
+    }
+    
+    function pointInTriangle(px, py, ax, ay, bx, by, cx, cy) {
+        const v0x = cx - ax, v0y = cy - ay;
+        const v1x = bx - ax, v1y = by - ay;
+        const v2x = px - ax, v2y = py - ay;
+        
+        const dot00 = v0x * v0x + v0y * v0y;
+        const dot01 = v0x * v1x + v0y * v1y;
+        const dot02 = v0x * v2x + v0y * v2y;
+        const dot11 = v1x * v1x + v1y * v1y;
+        const dot12 = v1x * v2x + v1y * v2y;
+        
+        const invDenom = 1 / (dot00 * dot11 - dot01 * dot01);
+        const u = (dot11 * dot02 - dot01 * dot12) * invDenom;
+        const v = (dot00 * dot12 - dot01 * dot02) * invDenom;
+        
+        return (u >= 0) && (v >= 0) && (u + v <= 1);
+    }
+    
+    let limit = 2 * n;
+    while (indicesList.length > 2 && limit > 0) {
+        limit--;
+        let earFound = false;
+        for (let i = 0; i < indicesList.length; i++) {
+            const prev = indicesList[(i - 1 + indicesList.length) % indicesList.length];
+            const curr = indicesList[i];
+            const next = indicesList[(i + 1) % indicesList.length];
+            
+            const a = pts[prev];
+            const b = pts[curr];
+            const c = pts[next];
+            
+            const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if (cross <= 0) continue;
+            
+            let hasPointInside = false;
+            for (let j = 0; j < indicesList.length; j++) {
+                const idx = indicesList[j];
+                if (idx === prev || idx === curr || idx === next) continue;
+                const p = pts[idx];
+                if (pointInTriangle(p.x, p.y, a.x, a.y, b.x, b.y, c.x, c.y)) {
+                    hasPointInside = true;
+                    break;
+                }
+            }
+            
+            if (!hasPointInside) {
+                triangles.push([prev, curr, next]);
+                indicesList.splice(i, 1);
+                earFound = true;
+                break;
+            }
+        }
+        if (!earFound) {
+            for (let i = 0; i < indicesList.length; i++) {
+                const prev = indicesList[(i - 1 + indicesList.length) % indicesList.length];
+                const curr = indicesList[i];
+                const next = indicesList[(i + 1) % indicesList.length];
+                const a = pts[prev];
+                const b = pts[curr];
+                const c = pts[next];
+                const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+                if (cross > 0) {
+                    triangles.push([prev, curr, next]);
+                    indicesList.splice(i, 1);
+                    break;
+                }
+            }
+        }
+    }
+    
+    return triangles;
+}
+
+function createExtrudedPolygonMesh(rhino, vertices2D, depth, zTop, isCCW = true) {
+    const mesh = new rhino.Mesh();
+    const n = vertices2D.length;
+    if (n < 3) return mesh;
+    
+    const zBottom = zTop - depth;
+    
+    vertices2D.forEach(v => mesh.vertices().add(v[0], v[1], zBottom));
+    vertices2D.forEach(v => mesh.vertices().add(v[0], v[1], zTop));
+    
+    // Triangulate
+    const triangles = triangulatePolygon(vertices2D);
+    triangles.forEach(tri => {
+        // Bottom cap: clockwise to face downwards
+        mesh.faces().addTriFace(tri[2], tri[1], tri[0]);
+        // Top cap: counter-clockwise to face upwards
+        mesh.faces().addTriFace(tri[0] + n, tri[1] + n, tri[2] + n);
+    });
+    
+    // Side quads
+    for (let j = 0; j < n; j++) {
+        const jNext = (j + 1) % n;
+        mesh.faces().addQuadFace(j, jNext, jNext + n, j + n);
+    }
+    
+    return mesh;
+}
+
+function createVaultMesh(rhino, cell, vaultHeight, zTop, M = 8) {
+    const mesh = new rhino.Mesh();
+    const n = cell.length;
+    if (n < 3) return mesh;
+    
+    let sx = 0, sy = 0;
+    cell.forEach(pt => { sx += pt[0]; sy += pt[1]; });
+    const cx = sx / n;
+    const cy = sy / n;
+    
+    let sumDist = 0;
+    cell.forEach(pt => {
+        sumDist += Math.hypot(pt[0] - cx, pt[1] - cy);
+    });
+    const R_avg = sumDist / n;
+    if (R_avg < 1e-6) return mesh;
+    
+    let globalIdx = 0;
+    
+    for (let j = 0; j < n; j++) {
+        const p1 = cell[j];
+        const p2 = cell[(j + 1) % n];
+        
+        for (let u = 0; u <= M; u++) {
+            for (let v = 0; v <= u; v++) {
+                let bx = p1[0], by = p1[1];
+                if (u > 0) {
+                    const tSeg = v / u;
+                    bx = p1[0] + (p2[0] - p1[0]) * tSeg;
+                    by = p1[1] + (p2[1] - p1[1]) * tSeg;
+                }
+                
+                const tCent = u / M;
+                const x = cx + (bx - cx) * tCent;
+                const y = cy + (by - cy) * tCent;
+                
+                const d = Math.hypot(x - cx, y - cy);
+                const heightFactor = Math.max(0, 1 - (d / R_avg) ** 2);
+                const z = zTop + vaultHeight * heightFactor;
+                
+                mesh.vertices().add(x, y, z);
+            }
+        }
+        
+        const getIdx = (u, v) => {
+            const rowStart = (u * (u + 1)) / 2;
+            return globalIdx + rowStart + v;
+        };
+        
+        for (let u = 0; u < M; u++) {
+            for (let v = 0; v <= u; v++) {
+                const i1 = getIdx(u, v);
+                const i2 = getIdx(u + 1, v);
+                const i3 = getIdx(u + 1, v + 1);
+                mesh.faces().addTriFace(i1, i2, i3);
+                
+                if (v < u) {
+                    const i4 = getIdx(u, v);
+                    const i5 = getIdx(u + 1, v + 1);
+                    const i6 = getIdx(u, v + 1);
+                    mesh.faces().addTriFace(i4, i5, i6);
+                }
+            }
+        }
+        
+        globalIdx += ((M + 1) * (M + 2)) / 2;
+    }
+    
+    return mesh;
+}
+
 self.onmessage = async function(e) {
     const { type, buffer, layerIndices } = e.data;
     
@@ -132,7 +401,35 @@ self.onmessage = async function(e) {
         
         else if (type === 'export-scene') {
             console.log("[Worker] Compiling Medial Axis visualizer scene to .3dm file...");
-            const { boundary, skeleton, ribs, circles } = e.data;
+            const {
+                polygons,
+                numFloors,
+                floorHeight,
+                show3DColumns,
+                show3DBeams,
+                showFloorSlabs,
+                showBalconies,
+                showBriseSoleil,
+                showVaultedRoofs,
+                columnRadius,
+                beamWidth,
+                beamDepth,
+                slabThickness,
+                balconyOffset,
+                balconyThickness,
+                louverWidth,
+                louverDepth,
+                louverSpacing,
+                vaultHeight,
+                // Fallbacks:
+                boundary,
+                skeleton,
+                ribs,
+                circles,
+                bays,
+                planarGraphVertices,
+                planarGraphEdges
+            } = e.data;
             const doc = new rhino.File3dm();
             
             // 1. Create designated layers
@@ -164,106 +461,333 @@ self.onmessage = async function(e) {
             const circlesLayerIdx = doc.layers().count - 1;
             layerCircles.delete();
             
-            // 2. Add Boundary Polygon (as closed Polyline Curve)
-            if (boundary && boundary.length > 0) {
-                const attr = new rhino.ObjectAttributes();
-                attr.layerIndex = boundaryLayerIdx;
-                attr.name = "Boundary_Polygon";
-                
-                const pl = new rhino.Polyline(boundary.length + 1);
-                boundary.forEach(pt => pl.add(pt[0], pt[1], pt[2] || 0.0));
-                pl.add(boundary[0][0], boundary[0][1], boundary[0][2] || 0.0); // Close polyline
-                
-                doc.objects().addPolyline(pl, attr);
-                pl.delete();
-                attr.delete();
-            }
-            
-            // 3. Add Skeleton Branches
-            if (skeleton && skeleton.length > 0) {
-                const attr = new rhino.ObjectAttributes();
-                attr.layerIndex = skeletonLayerIdx;
-                
-                skeleton.forEach((branch, idx) => {
-                    attr.name = `Skeleton_Branch_${idx}`;
-                    const pl = new rhino.Polyline(branch.length);
-                    branch.forEach(pt => pl.add(pt[0], pt[1], pt[2] || 0.0));
-                    
-                    doc.objects().addPolyline(pl, attr);
-                    pl.delete();
-                });
-                attr.delete();
-            }
-            
-            // 4. Add Structural Ribs
-            if (ribs && ribs.length > 0) {
-                const attr = new rhino.ObjectAttributes();
-                attr.layerIndex = ribsLayerIdx;
-                
-                ribs.forEach((rib, idx) => {
-                    attr.name = `Structural_Rib_${idx}`;
-                    doc.objects().addLine(
-                        [rib.start[0], rib.start[1], rib.start[2] || 0.0],
-                        [rib.end[0], rib.end[1], rib.end[2] || 0.0],
-                        attr
-                    );
-                });
-                attr.delete();
-            }
-            
-            // 5. Add Inscribed Circles
-            if (circles && circles.length > 0) {
-                const attr = new rhino.ObjectAttributes();
-                attr.layerIndex = circlesLayerIdx;
-                
-                circles.forEach((circle, idx) => {
-                    attr.name = `Inscribed_Circle_${idx}`;
-                    
-                    // Generate polyline circle on XY plane
-                    const center = circle.center;
-                    const radius = circle.radius;
-                    const segments = 64;
-                    const pl = new rhino.Polyline(segments + 1);
-                    
-                    for (let j = 0; j <= segments; j++) {
-                        const theta = (j / segments) * Math.PI * 2;
-                        pl.add(
-                            center[0] + Math.cos(theta) * radius,
-                            center[1] + Math.sin(theta) * radius,
-                            center[2] || 0.0
-                        );
-                    }
-                    doc.objects().addPolyline(pl, attr);
-                    pl.delete();
-                });
-                attr.delete();
-            }
-            
-            // 6. Add Structural Bays (Cells)
-            if (e.data.bays && e.data.bays.length > 0) {
-                const layerBays = new rhino.Layer();
-                layerBays.name = "Structural_Bays";
-                layerBays.color = { r: 59, g: 130, b: 246, a: 255 }; // Slate Blue
-                doc.layers().add(layerBays);
-                const baysLayerIdx = doc.layers().count - 1;
-                layerBays.delete();
+            const layerBays = new rhino.Layer();
+            layerBays.name = "Structural_Bays";
+            layerBays.color = { r: 59, g: 130, b: 246, a: 255 }; // Slate Blue
+            doc.layers().add(layerBays);
+            const baysLayerIdx = doc.layers().count - 1;
+            layerBays.delete();
 
-                const attr = new rhino.ObjectAttributes();
-                attr.layerIndex = baysLayerIdx;
-                
-                e.data.bays.forEach((bay, idx) => {
-                    attr.name = `Structural_Bay_${idx}`;
-                    const pl = new rhino.Polyline(bay.length + 1);
-                    bay.forEach(pt => pl.add(pt[0], pt[1], pt[2] || 0.0));
-                    pl.add(bay[0][0], bay[0][1], bay[0][2] || 0.0); // Close polyline
+            // Initialize 3D layers
+            const layer3DSlabs = new rhino.Layer();
+            layer3DSlabs.name = "3D_Slabs";
+            layer3DSlabs.color = { r: 229, g: 231, b: 235, a: 255 }; // Concrete
+            doc.layers().add(layer3DSlabs);
+            const slabs3DIdx = doc.layers().count - 1;
+            layer3DSlabs.delete();
+
+            const layer3DColumns = new rhino.Layer();
+            layer3DColumns.name = "3D_Columns";
+            layer3DColumns.color = { r: 55, g: 65, b: 81, a: 255 }; // Metallic Charcoal
+            doc.layers().add(layer3DColumns);
+            const columns3DIdx = doc.layers().count - 1;
+            layer3DColumns.delete();
+
+            const layer3DBeams = new rhino.Layer();
+            layer3DBeams.name = "3D_Beams";
+            layer3DBeams.color = { r: 75, g: 85, b: 99, a: 255 }; // Structured Charcoal
+            doc.layers().add(layer3DBeams);
+            const beams3DIdx = doc.layers().count - 1;
+            layer3DBeams.delete();
+
+            const layer3DBalconies = new rhino.Layer();
+            layer3DBalconies.name = "3D_Balconies";
+            layer3DBalconies.color = { r: 13, g: 148, b: 136, a: 255 }; // Teal Glass
+            doc.layers().add(layer3DBalconies);
+            const balconies3DIdx = doc.layers().count - 1;
+            layer3DBalconies.delete();
+
+            const layer3DBriseSoleil = new rhino.Layer();
+            layer3DBriseSoleil.name = "3D_Brise_Soleil";
+            layer3DBriseSoleil.color = { r: 217, g: 119, b: 6, a: 255 }; // Timber
+            doc.layers().add(layer3DBriseSoleil);
+            const briseSoleil3DIdx = doc.layers().count - 1;
+            layer3DBriseSoleil.delete();
+
+            const layer3DVaults = new rhino.Layer();
+            layer3DVaults.name = "3D_Vaults";
+            layer3DVaults.color = { r: 243, g: 244, b: 246, a: 255 }; // Plaster
+            doc.layers().add(layer3DVaults);
+            const vaults3DIdx = doc.layers().count - 1;
+            layer3DVaults.delete();
+
+            let polys = polygons;
+            if (!polys) {
+                polys = [{
+                    boundary,
+                    hasScaffold: true,
+                    skeleton,
+                    ribs,
+                    circles,
+                    bays,
+                    planarGraphVertices,
+                    planarGraphEdges
+                }];
+            }
+
+            polys.forEach((poly, polyIdx) => {
+                const boundary = poly.boundary;
+                const skeleton = poly.skeleton;
+                const ribs = poly.ribs;
+                const circles = poly.circles;
+                const bays = poly.bays;
+                const planarGraphVertices = poly.planarGraphVertices;
+                const planarGraphEdges = poly.planarGraphEdges;
+                const hasScaffold = poly.hasScaffold !== false;
+
+                // A. Add Boundary Polygon
+                if (boundary && boundary.length > 0) {
+                    const attr = new rhino.ObjectAttributes();
+                    attr.layerIndex = boundaryLayerIdx;
+                    attr.name = `Boundary_Polygon_${polyIdx}`;
+                    
+                    const pl = new rhino.Polyline(boundary.length + 1);
+                    boundary.forEach(pt => pl.add(pt[0], pt[1], pt[2] || 0.0));
+                    pl.add(boundary[0][0], boundary[0][1], boundary[0][2] || 0.0);
                     
                     doc.objects().addPolyline(pl, attr);
                     pl.delete();
-                });
-                attr.delete();
-            }
-            
-            // 7. Serialize and return bytes
+                    attr.delete();
+                }
+                
+                // B. Add Skeleton Branches
+                if (hasScaffold && skeleton && skeleton.length > 0) {
+                    const attr = new rhino.ObjectAttributes();
+                    attr.layerIndex = skeletonLayerIdx;
+                    
+                    skeleton.forEach((branch, idx) => {
+                        attr.name = `Skeleton_P${polyIdx}_Branch_${idx}`;
+                        const pl = new rhino.Polyline(branch.length);
+                        branch.forEach(pt => pl.add(pt[0], pt[1], pt[2] || 0.0));
+                        
+                        doc.objects().addPolyline(pl, attr);
+                        pl.delete();
+                    });
+                    attr.delete();
+                }
+                
+                // C. Add Structural Ribs
+                if (hasScaffold && ribs && ribs.length > 0) {
+                    const attr = new rhino.ObjectAttributes();
+                    attr.layerIndex = ribsLayerIdx;
+                    
+                    ribs.forEach((rib, idx) => {
+                        attr.name = `Structural_Rib_P${polyIdx}_${idx}`;
+                        doc.objects().addLine(
+                            [rib.start[0], rib.start[1], rib.start[2] || 0.0],
+                            [rib.end[0], rib.end[1], rib.end[2] || 0.0],
+                            attr
+                        );
+                    });
+                    attr.delete();
+                }
+                
+                // D. Add Inscribed Circles
+                if (hasScaffold && circles && circles.length > 0) {
+                    const attr = new rhino.ObjectAttributes();
+                    attr.layerIndex = circlesLayerIdx;
+                    
+                    circles.forEach((circle, idx) => {
+                        attr.name = `Inscribed_Circle_P${polyIdx}_${idx}`;
+                        
+                        const center = circle.center;
+                        const radius = circle.radius;
+                        const segments = 64;
+                        const pl = new rhino.Polyline(segments + 1);
+                        
+                        for (let j = 0; j <= segments; j++) {
+                            const theta = (j / segments) * Math.PI * 2;
+                            pl.add(
+                                center[0] + Math.cos(theta) * radius,
+                                center[1] + Math.sin(theta) * radius,
+                                center[2] || 0.0
+                            );
+                        }
+                        doc.objects().addPolyline(pl, attr);
+                        pl.delete();
+                    });
+                    attr.delete();
+                }
+                
+                // E. Add Structural Bays
+                if (hasScaffold && bays && bays.length > 0) {
+                    const attr = new rhino.ObjectAttributes();
+                    attr.layerIndex = baysLayerIdx;
+                    
+                    bays.forEach((bay, idx) => {
+                        attr.name = `Structural_Bay_P${polyIdx}_${idx}`;
+                        const pl = new rhino.Polyline(bay.length + 1);
+                        bay.forEach(pt => pl.add(pt[0], pt[1], pt[2] || 0.0));
+                        pl.add(bay[0][0], bay[0][1], bay[0][2] || 0.0);
+                        
+                        doc.objects().addPolyline(pl, attr);
+                        pl.delete();
+                    });
+                    attr.delete();
+                }
+
+                // F. Add 3D Stack
+                if (hasScaffold && numFloors > 0) {
+                    let isCCW = true;
+                    let area = 0;
+                    for (let j = 0; j < boundary.length; j++) {
+                        const p1 = boundary[j];
+                        const p2 = boundary[(j + 1) % boundary.length];
+                        area += (p1[0] * p2[1] - p2[0] * p1[1]);
+                    }
+                    isCCW = area > 0;
+
+                    const boundaryNormals = [];
+                    for (let j = 0; j < boundary.length; j++) {
+                        const p1 = boundary[j];
+                        const p2 = boundary[(j + 1) % boundary.length];
+                        const dx = p2[0] - p1[0];
+                        const dy = p2[1] - p1[1];
+                        const len = Math.hypot(dx, dy);
+                        let nx = 0, ny = 0;
+                        if (len > 1e-6) {
+                            if (isCCW) {
+                                nx = dy / len;
+                                ny = -dx / len;
+                            } else {
+                                nx = -dy / len;
+                                ny = dx / len;
+                            }
+                        }
+                        boundaryNormals.push({ x: nx, y: ny, length: len });
+                    }
+
+                    const vertices = (planarGraphVertices && planarGraphVertices.length > 0) ? planarGraphVertices : boundary;
+                    const edges = [];
+                    if (planarGraphVertices && planarGraphEdges && planarGraphEdges.length > 0) {
+                        planarGraphEdges.forEach(edge => {
+                            const ptU = planarGraphVertices[edge[0]];
+                            const ptV = planarGraphVertices[edge[1]];
+                            edges.push([ptU, ptV]);
+                        });
+                    } else {
+                        for (let j = 0; j < boundary.length; j++) {
+                            edges.push([boundary[j], boundary[(j + 1) % boundary.length]]);
+                        }
+                    }
+
+                    for (let i = 0; i < numFloors; i++) {
+                        const zFloor = i * floorHeight;
+
+                        if (showFloorSlabs && boundary && boundary.length >= 3) {
+                            const attr = new rhino.ObjectAttributes();
+                            attr.layerIndex = slabs3DIdx;
+                            attr.name = `Floor_Slab_P${polyIdx}_F${i}`;
+                            const slabMesh = createExtrudedPolygonMesh(rhino, boundary, slabThickness, zFloor, isCCW);
+                            doc.objects().addMesh(slabMesh, attr);
+                            slabMesh.delete();
+                            attr.delete();
+                        }
+
+                        if (show3DColumns) {
+                            const attr = new rhino.ObjectAttributes();
+                            attr.layerIndex = columns3DIdx;
+                            const colH = floorHeight - slabThickness;
+                            vertices.forEach((v, idx) => {
+                                attr.name = `Column_P${polyIdx}_F${i}_${idx}`;
+                                const colMesh = createCylinderMesh(rhino, v[0], v[1], zFloor, columnRadius, colH, 12);
+                                doc.objects().addMesh(colMesh, attr);
+                                colMesh.delete();
+                            });
+                            attr.delete();
+                        }
+
+                        if (show3DBeams) {
+                            const attr = new rhino.ObjectAttributes();
+                            attr.layerIndex = beams3DIdx;
+                            edges.forEach(([ptU, ptV], idx) => {
+                                attr.name = `Beam_P${polyIdx}_F${i}_${idx}`;
+                                const beamMesh = createBoxMesh(rhino, ptU[0], ptU[1], ptV[0], ptV[1], beamWidth, beamDepth, zFloor - slabThickness);
+                                doc.objects().addMesh(beamMesh, attr);
+                                beamMesh.delete();
+                            });
+                            attr.delete();
+                        }
+
+                        if (showBalconies && boundary && boundary.length >= 3) {
+                            const attr = new rhino.ObjectAttributes();
+                            attr.layerIndex = balconies3DIdx;
+                            for (let j = 0; j < boundary.length; j++) {
+                                const p1 = boundary[j];
+                                const p2 = boundary[(j + 1) % boundary.length];
+                                const normal = boundaryNormals[j];
+                                const len = normal.length;
+                                if (len < 1e-3) continue;
+
+                                attr.name = `Balcony_Slab_P${polyIdx}_F${i}_${j}`;
+                                const offsetX = normal.x * (balconyOffset / 2);
+                                const offsetY = normal.y * (balconyOffset / 2);
+                                const balMesh = createBoxMesh(rhino, p1[0], p1[1], p2[0], p2[1], balconyOffset, balconyThickness, zFloor, offsetX, offsetY);
+                                doc.objects().addMesh(balMesh, attr);
+                                balMesh.delete();
+
+                                attr.name = `Balcony_Railing_P${polyIdx}_F${i}_${j}`;
+                                const railingHeight = 1.1;
+                                const railingThick = 0.02;
+                                const railOffsetX = normal.x * balconyOffset;
+                                const railOffsetY = normal.y * balconyOffset;
+                                const railMesh = createBoxMesh(rhino, p1[0], p1[1], p2[0], p2[1], railingThick, railingHeight, zFloor + railingHeight, railOffsetX, railOffsetY);
+                                doc.objects().addMesh(railMesh, attr);
+                                railMesh.delete();
+                            }
+                            attr.delete();
+                        }
+
+                        if (showBriseSoleil && boundary && boundary.length >= 3) {
+                            const attr = new rhino.ObjectAttributes();
+                            attr.layerIndex = briseSoleil3DIdx;
+                            for (let j = 0; j < boundary.length; j++) {
+                                const p1 = boundary[j];
+                                const p2 = boundary[(j + 1) % boundary.length];
+                                const normal = boundaryNormals[j];
+                                const len = normal.length;
+                                if (len < 1e-3) continue;
+
+                                const spacing = louverSpacing;
+                                const numLouvers = Math.max(2, Math.floor(len / spacing));
+                                const lHeight = floorHeight - slabThickness;
+
+                                for (let k = 0; k <= numLouvers; k++) {
+                                    const t = k / numLouvers;
+                                    const lx = p1[0] + (p2[0] - p1[0]) * t + normal.x * 0.15;
+                                    const ly = p1[1] + (p2[1] - p1[1]) * t + normal.y * 0.15;
+                                    
+                                    attr.name = `Louver_P${polyIdx}_F${i}_S${j}_L${k}`;
+                                    const angle = Math.atan2(p2[1] - p1[1], p2[0] - p1[0]);
+                                    const ax = lx - Math.cos(angle) * (louverWidth / 2);
+                                    const ay = ly - Math.sin(angle) * (louverWidth / 2);
+                                    const bx = lx + Math.cos(angle) * (louverWidth / 2);
+                                    const by = ly + Math.sin(angle) * (louverWidth / 2);
+                                    
+                                    const louverMesh = createBoxMesh(rhino, ax, ay, bx, by, louverDepth, lHeight, zFloor + lHeight);
+                                    doc.objects().addMesh(louverMesh, attr);
+                                    louverMesh.delete();
+                                }
+                            }
+                            attr.delete();
+                        }
+                    }
+
+                    if (showVaultedRoofs && bays && bays.length > 0) {
+                        const attr = new rhino.ObjectAttributes();
+                        attr.layerIndex = vaults3DIdx;
+                        const zTop = (numFloors - 1) * floorHeight;
+                        bays.forEach((cell, cellIdx) => {
+                            attr.name = `Vaulted_Roof_P${polyIdx}_${cellIdx}`;
+                            const vaultMesh = createVaultMesh(rhino, cell, vaultHeight, zTop, 8);
+                            doc.objects().addMesh(vaultMesh, attr);
+                            vaultMesh.delete();
+                        });
+                        attr.delete();
+                    }
+                }
+            });
+
             const bytes = doc.toByteArray();
             doc.delete();
             

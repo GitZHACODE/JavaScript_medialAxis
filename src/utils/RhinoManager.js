@@ -73,7 +73,7 @@ export class RhinoManager {
         // Clear previous Rhino imports
         this.clearRhinoGeometries();
         
-        let loadedPolygonPoints = null;
+        const closedCurves = [];
         const loader = new THREE.BufferGeometryLoader();
         
         geometries.forEach(geomData => {
@@ -116,19 +116,15 @@ export class RhinoManager {
                     line.userData = { type: 'rhino-geometry' };
                     this.appContext.rhinoGroup.add(line);
                     
-                    // Capture first closed curve as candidate for our active boundary polygon!
-                    if (!loadedPolygonPoints && geomData.points.length >= 3) {
+                    if (geomData.points.length >= 3) {
                         const start = geomData.points[0];
                         const end = geomData.points[geomData.points.length - 1];
                         const dist = Math.sqrt((start[0]-end[0])**2 + (start[1]-end[1])**2 + (start[2]-end[2])**2);
                         
-                        if (dist < 0.1 || geomData.points.length >= 4) {
-                            // Close loop and map to 2D
-                            loadedPolygonPoints = geomData.points.map(pt => [pt[0], pt[1]]);
-                            // Remove last point if duplicate
-                            if (dist < 0.1) {
-                                loadedPolygonPoints.pop();
-                            }
+                        if (dist < 0.2) {
+                            const pts2d = geomData.points.map(pt => [pt[0], pt[1]]);
+                            pts2d.pop();
+                            closedCurves.push(pts2d);
                         }
                     }
                 } catch (err) {
@@ -137,10 +133,9 @@ export class RhinoManager {
             }
         });
         
-        // If we found a valid polygon boundary curve, apply it to the Medial Axis Visualizer!
-        if (loadedPolygonPoints && loadedPolygonPoints.length >= 3) {
-            console.log(`[RhinoManager] Found boundary curve with ${loadedPolygonPoints.length} vertices. Setting active polygon!`);
-            this.appContext.setPolygonFrom3dm(loadedPolygonPoints);
+        if (closedCurves.length > 0) {
+            console.log(`[RhinoManager] Found ${closedCurves.length} closed boundary curves. Setting imported polygons!`);
+            this.appContext.setPolygonsFrom3dm(closedCurves);
         }
     }
     
@@ -169,112 +164,129 @@ export class RhinoManager {
     exportSceneTo3dm(filename = "medial_axis_export.3dm") {
         console.log(`[RhinoManager] Triggering background export to .3dm...`);
         
-        // 1. Gather active polygon boundary
-        const boundary = this.appContext.state.polygon.map(v => [v.x, v.y, 0.0]);
-        
-        // 2. Gather active medial axis curves
-        const skeleton = [];
-        if (this.appContext.state.showSkeleton && this.appContext.state.polygon.length >= 3) {
-            if (this.appContext.state.planarGraph) {
-                const graph = this.appContext.state.planarGraph;
-                graph.edges.forEach(edge => {
-                    if (edge[2] === 'skeleton') {
-                        const ptU = graph.vertices[edge[0]];
-                        const ptV = graph.vertices[edge[1]];
-                        skeleton.push([
-                            [ptU.x, ptU.y, 0.0],
-                            [ptV.x, ptV.y, 0.0]
-                        ]);
-                    }
-                });
-            } else {
-                if (this.appContext.state.simplifySkeleton) {
-                    // Simplified segments
-                    const segmentsToExport = this.appContext.state.pruneBranches
-                        ? this.appContext.state.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
-                        : this.appContext.state.skeletonData.simplifiedSegments;
-                        
-                    segmentsToExport.forEach(seg => {
-                        skeleton.push([
-                            [seg.start.x, seg.start.y, 0.0],
-                            [seg.end.x, seg.end.y, 0.0]
-                        ]);
+        // 1. Gather all polygons to export
+        const originalActiveId = this.appContext.state.activePolygonId;
+        const polygonsToExport = this.appContext.state.importedPolygons.map(item => {
+            this.appContext.state.activePolygonId = item.id;
+            
+            const boundary = item.polygon.map(v => [v.x, v.y, 0.0]);
+            
+            if (!item.hasScaffold) {
+                return {
+                    boundary,
+                    hasScaffold: false
+                };
+            }
+            
+            const skeleton = [];
+            if (this.appContext.state.showSkeleton && item.polygon.length >= 3) {
+                if (item.planarGraph) {
+                    const graph = item.planarGraph;
+                    graph.edges.forEach(edge => {
+                        if (edge[2] === 'skeleton') {
+                            const ptU = graph.vertices[edge[0]];
+                            const ptV = graph.vertices[edge[1]];
+                            skeleton.push([
+                                [ptU.x, ptU.y, 0.0],
+                                [ptV.x, ptV.y, 0.0]
+                            ]);
+                        }
                     });
                 } else {
-                    // Curved skeleton curves
-                    const pts = this.appContext.state.skeletonData.regularPoints;
-                    const samples = this.appContext.state.samplesPerEdge;
-                    for (let i = 0; i < this.appContext.state.polygon.length; i++) {
-                        const branch = [];
-                        for (let j = 0; j < samples; j++) {
-                            const idx = i * samples + j;
-                            if (pts[idx]) {
-                                branch.push([pts[idx].x, pts[idx].y, 0.0]);
+                    if (this.appContext.state.simplifySkeleton) {
+                        const segmentsToExport = this.appContext.state.pruneBranches
+                            ? item.skeletonData.simplifiedSegments.filter(seg => !(seg.start.isEndPoint || seg.end.isEndPoint))
+                            : item.skeletonData.simplifiedSegments;
+                            
+                        segmentsToExport.forEach(seg => {
+                            skeleton.push([
+                                [seg.start.x, seg.start.y, 0.0],
+                                [seg.end.x, seg.end.y, 0.0]
+                            ]);
+                        });
+                    } else {
+                        const pts = item.skeletonData.regularPoints;
+                        const samples = this.appContext.state.samplesPerEdge;
+                        for (let i = 0; i < item.polygon.length; i++) {
+                            const branch = [];
+                            for (let j = 0; j < samples; j++) {
+                                const idx = i * samples + j;
+                                if (pts[idx]) {
+                                    branch.push([pts[idx].x, pts[idx].y, 0.0]);
+                                }
                             }
-                        }
-                        if (branch.length >= 2) {
-                            skeleton.push(branch);
+                            if (branch.length >= 2) {
+                                skeleton.push(branch);
+                            }
                         }
                     }
                 }
             }
-        }
-        
-        // 3. Gather structural ribs (if visible)
-        const ribs = [];
-        if (this.appContext.state.showSkeleton && this.appContext.state.showRibs) {
-            if (this.appContext.state.planarGraph) {
-                const graph = this.appContext.state.planarGraph;
-                graph.edges.forEach(edge => {
-                    if (edge[2] && edge[2].startsWith('rib_')) {
-                        const ptU = graph.vertices[edge[0]];
-                        const ptV = graph.vertices[edge[1]];
+            
+            const ribs = [];
+            if (this.appContext.state.showSkeleton && this.appContext.state.showRibs) {
+                if (item.planarGraph) {
+                    const graph = item.planarGraph;
+                    graph.edges.forEach(edge => {
+                        if (edge[2] && edge[2].startsWith('rib_')) {
+                            const ptU = graph.vertices[edge[0]];
+                            const ptV = graph.vertices[edge[1]];
+                            ribs.push({
+                                start: [ptU.x, ptU.y, 0.0],
+                                end: [ptV.x, ptV.y, 0.0]
+                            });
+                        }
+                    });
+                } else if (item.id === originalActiveId && this.appContext.acceptedRibsCache) {
+                    this.appContext.acceptedRibsCache.forEach(rib => {
                         ribs.push({
-                            start: [ptU.x, ptU.y, 0.0],
-                            end: [ptV.x, ptV.y, 0.0]
+                            start: [rib.source.x, rib.source.y, 0.0],
+                            end: [rib.target.x, rib.target.y, 0.0]
                         });
-                    }
+                    });
+                }
+            }
+            
+            const circles = [];
+            if (item.id === originalActiveId && this.appContext.state.hoverCircle && this.appContext.state.hoveredMedialPoint) {
+                const hp = this.appContext.state.hoveredMedialPoint;
+                circles.push({
+                    center: [hp.x, hp.y, 0.0],
+                    radius: hp.radius
                 });
-            } else if (this.appContext.acceptedRibsCache) {
-                this.appContext.acceptedRibsCache.forEach(rib => {
-                    ribs.push({
-                        start: [rib.source.x, rib.source.y, 0.0],
-                        end: [rib.target.x, rib.target.y, 0.0]
+            }
+            if (item.polygon.length >= 3 && item.skeletonData.simplifiedNodes) {
+                const internalNodes = item.skeletonData.simplifiedNodes.filter(n => !n.isEndPoint);
+                internalNodes.forEach(node => {
+                    circles.push({
+                        center: [node.x, node.y, 0.0],
+                        radius: node.radius || 5.0
                     });
                 });
             }
-        }
-        
-        // 4. Gather max inscribed circles
-        const circles = [];
-        // Export the active hover circle if visible
-        if (this.appContext.state.hoverCircle && this.appContext.state.hoveredMedialPoint) {
-            const hp = this.appContext.state.hoveredMedialPoint;
-            circles.push({
-                center: [hp.x, hp.y, 0.0],
-                radius: hp.radius
-            });
-        }
-        // Also export inscribed circles at all simplified internal nodes!
-        if (this.appContext.state.polygon.length >= 3 && this.appContext.state.skeletonData.simplifiedNodes) {
-            const internalNodes = this.appContext.state.skeletonData.simplifiedNodes.filter(n => !n.isEndPoint);
-            internalNodes.forEach(node => {
-                circles.push({
-                    center: [node.x, node.y, 0.0],
-                    radius: node.radius || 5.0 // Fallback if radius not set
+            
+            const bays = [];
+            if (item.structuralBays) {
+                item.structuralBays.forEach(cell => {
+                    bays.push(cell.map(v => [v.x, v.y, 0.0]));
                 });
-            });
-        }
+            }
+            
+            return {
+                boundary,
+                hasScaffold: true,
+                skeleton,
+                ribs,
+                circles,
+                bays,
+                planarGraphVertices: item.planarGraph ? item.planarGraph.vertices.map(v => [v.x, v.y, 0.0]) : null,
+                planarGraphEdges: item.planarGraph ? item.planarGraph.edges.map(e => [e[0], e[1]]) : null
+            };
+        });
         
-        // 5. Gather structural bays/cells (if computed)
-        const bays = [];
-        if (this.appContext.state.structuralBays) {
-            this.appContext.state.structuralBays.forEach(cell => {
-                bays.push(cell.map(v => [v.x, v.y, 0.0]));
-            });
-        }
+        this.appContext.state.activePolygonId = originalActiveId;
         
-        // 6. Post to Web Worker and trigger download on resolve
+        // 2. Post to Web Worker and trigger download on resolve
         return new Promise((resolve, reject) => {
             this.exportResolve = (bytes) => {
                 try {
@@ -306,11 +318,25 @@ export class RhinoManager {
             
             this.worker.postMessage({
                 type: 'export-scene',
-                boundary,
-                skeleton,
-                ribs,
-                circles,
-                bays
+                polygons: polygonsToExport,
+                numFloors: this.appContext.state.numFloors,
+                floorHeight: this.appContext.state.floorHeight,
+                show3DColumns: this.appContext.state.show3DColumns,
+                show3DBeams: this.appContext.state.show3DBeams,
+                showFloorSlabs: this.appContext.state.showFloorSlabs,
+                showBalconies: this.appContext.state.showBalconies,
+                showBriseSoleil: this.appContext.state.showBriseSoleil,
+                showVaultedRoofs: this.appContext.state.showVaultedRoofs,
+                columnRadius: this.appContext.state.columnRadius,
+                beamWidth: this.appContext.state.beamWidth,
+                beamDepth: this.appContext.state.beamDepth,
+                slabThickness: this.appContext.state.slabThickness,
+                balconyOffset: this.appContext.state.balconyOffset,
+                balconyThickness: this.appContext.state.balconyThickness,
+                louverWidth: this.appContext.state.louverWidth,
+                louverDepth: this.appContext.state.louverDepth,
+                louverSpacing: this.appContext.state.louverSpacing,
+                vaultHeight: this.appContext.state.vaultHeight
             });
         });
     }
