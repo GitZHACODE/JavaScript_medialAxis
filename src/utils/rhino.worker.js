@@ -311,23 +311,23 @@ function createHyparCellMesh(rhino, vertices2D, zTop, zBottomBase, H, spacing, b
             mesh.vertices().add(Bx - uNx * w + vNxVal * d, By + uNy * w + vNyVal * d, Bz - uNz * w + vNzVal * d);
 
             // Add faces (CCW)
-            mesh.faces().addFace(vOffset + 0, vOffset + 2, vOffset + 1, vOffset + 0);
-            mesh.faces().addFace(vOffset + 0, vOffset + 3, vOffset + 2, vOffset + 0);
+            mesh.faces().addTriFace(vOffset + 0, vOffset + 2, vOffset + 1);
+            mesh.faces().addTriFace(vOffset + 0, vOffset + 3, vOffset + 2);
 
-            mesh.faces().addFace(vOffset + 4, vOffset + 5, vOffset + 6, vOffset + 4);
-            mesh.faces().addFace(vOffset + 4, vOffset + 6, vOffset + 7, vOffset + 4);
+            mesh.faces().addTriFace(vOffset + 4, vOffset + 5, vOffset + 6);
+            mesh.faces().addTriFace(vOffset + 4, vOffset + 6, vOffset + 7);
 
-            mesh.faces().addFace(vOffset + 0, vOffset + 1, vOffset + 5, vOffset + 0);
-            mesh.faces().addFace(vOffset + 0, vOffset + 5, vOffset + 4, vOffset + 0);
+            mesh.faces().addTriFace(vOffset + 0, vOffset + 1, vOffset + 5);
+            mesh.faces().addTriFace(vOffset + 0, vOffset + 5, vOffset + 4);
 
-            mesh.faces().addFace(vOffset + 1, vOffset + 2, vOffset + 6, vOffset + 1);
-            mesh.faces().addFace(vOffset + 1, vOffset + 6, vOffset + 5, vOffset + 1);
+            mesh.faces().addTriFace(vOffset + 1, vOffset + 2, vOffset + 6);
+            mesh.faces().addTriFace(vOffset + 1, vOffset + 6, vOffset + 5);
 
-            mesh.faces().addFace(vOffset + 2, vOffset + 3, vOffset + 7, vOffset + 2);
-            mesh.faces().addFace(vOffset + 2, vOffset + 7, vOffset + 6, vOffset + 2);
+            mesh.faces().addTriFace(vOffset + 2, vOffset + 3, vOffset + 7);
+            mesh.faces().addTriFace(vOffset + 2, vOffset + 7, vOffset + 6);
 
-            mesh.faces().addFace(vOffset + 3, vOffset + 0, vOffset + 4, vOffset + 3);
-            mesh.faces().addFace(vOffset + 3, vOffset + 4, vOffset + 7, vOffset + 3);
+            mesh.faces().addTriFace(vOffset + 3, vOffset + 0, vOffset + 4);
+            mesh.faces().addTriFace(vOffset + 3, vOffset + 4, vOffset + 7);
 
             vOffset += 8;
         }
@@ -778,33 +778,7 @@ function getVertexColor(pt, bipartiteData) {
 
 
 
-function getRoundedBalconyPoints(halfL, bOffset, radius, segments = 8) {
-    const pts = [];
-    pts.push([-halfL, 0]);
-    
-    const p0_x = -halfL, p0_y = bOffset - radius;
-    const p1_x = -halfL, p1_y = bOffset;
-    const p2_x = -halfL + radius, p2_y = bOffset;
-    for (let k = 0; k <= segments; k++) {
-        const t = k / segments;
-        const x = (1 - t) * (1 - t) * p0_x + 2 * (1 - t) * t * p1_x + t * t * p2_x;
-        const y = (1 - t) * (1 - t) * p0_y + 2 * (1 - t) * t * p1_y + t * t * p2_y;
-        pts.push([x, y]);
-    }
-    
-    const q0_x = halfL - radius, q0_y = bOffset;
-    const q1_x = halfL, q1_y = bOffset;
-    const q2_x = halfL, q2_y = bOffset - radius;
-    for (let k = 0; k <= segments; k++) {
-        const t = k / segments;
-        const x = (1 - t) * (1 - t) * q0_x + 2 * (1 - t) * t * q1_x + t * t * q2_x;
-        const y = (1 - t) * (1 - t) * q0_y + 2 * (1 - t) * t * q1_y + t * t * q2_y;
-        pts.push([x, y]);
-    }
-    
-    pts.push([halfL, 0]);
-    return pts;
-}
+
 
 function getAerofoilPoints(width, depth, segments = 8) {
     const pts = [];
@@ -1258,15 +1232,12 @@ self.onmessage = async function(e) {
                 showFloorSlabs,
                 showRoofSlab,
                 showVaultedRoofs,
-                showBalconies,
                 showBriseSoleil,
                 show3DCells,
                 columnRadius,
                 beamWidth,
                 beamDepth,
                 slabThickness,
-                balconyOffset,
-                balconyThickness,
                 louverWidth,
                 louverDepth,
                 louverSpacing,
@@ -1941,86 +1912,7 @@ self.onmessage = async function(e) {
                             attr.delete();
                         }
 
-                        // 4. Balconies (NULL on Ground & Roof, NULL if facing other buildings or touching partitions)
-                        if (showBalconies && !isGroundFloor && !isRoofFloor && floorPolygon && floorPolygon.length >= 3) {
-                                const attr = new rhino.ObjectAttributes();
-                                attr.layerIndex = timberIdx;
-                            
-                            const N = floorPolygon.length;
-                            const offsets = [];
-                            const hasBalcony = [];
-                            for (let j = 0; j < N; j++) {
-                                const context = segmentContexts[j] || 'open_space';
-                                const hasBal = (context !== 'other_building' && context !== 'touching');
-                                hasBalcony.push(hasBal);
-                                offsets.push(hasBal ? (context === 'courtyard' ? balconyOffset * 1.5 : balconyOffset) : 0);
-                            }
 
-                            const deltaOuter = [];
-                            const deltaInner = [];
-                            const rThick = 0.02;
-
-                            for (let j = 0; j < N; j++) {
-                                const jPrev = (j - 1 + N) % N;
-                                const dPrev = offsets[jPrev];
-                                const dCurr = offsets[j];
-                                const nPrev = boundaryNormals[jPrev];
-                                const nCurr = boundaryNormals[j];
-
-                                if (dPrev > 0 && dCurr > 0) {
-                                    deltaOuter.push(getMiterOffset(nPrev, nCurr, dPrev, dCurr));
-                                    deltaInner.push(getMiterOffset(nPrev, nCurr, dPrev - rThick, dCurr - rThick));
-                                } else if (dPrev > 0) {
-                                    deltaOuter.push({ x: nPrev.x * dPrev, y: nPrev.y * dPrev });
-                                    deltaInner.push({ x: nPrev.x * (dPrev - rThick), y: nPrev.y * (dPrev - rThick) });
-                                } else if (dCurr > 0) {
-                                    deltaOuter.push({ x: nCurr.x * dCurr, y: nCurr.y * dCurr });
-                                    deltaInner.push({ x: nCurr.x * (dCurr - rThick), y: nCurr.y * (dCurr - rThick) });
-                                } else {
-                                    deltaOuter.push({ x: 0, y: 0 });
-                                    deltaInner.push({ x: 0, y: 0 });
-                                }
-                            }
-
-                            for (let j = 0; j < N; j++) {
-                                if (!hasBalcony[j]) continue;
-                                const jNext = (j + 1) % N;
-                                const p1 = floorPolygon[j];
-                                const p2 = floorPolygon[jNext];
-
-                                const oStart = [ p1[0] + deltaOuter[j].x, p1[1] + deltaOuter[j].y ];
-                                const oEnd = [ p2[0] + deltaOuter[jNext].x, p2[1] + deltaOuter[jNext].y ];
-
-                                const shapePts = [
-                                    oStart,
-                                    oEnd,
-                                    [ p2[0], p2[1] ],
-                                    [ p1[0], p1[1] ]
-                                ];
-
-                                attr.name = `Balcony_Slab_P${polyIdx}_F${i}_${j}`;
-                                const balMesh = createExtrudedPolygonMesh(rhino, shapePts, balconyThickness, floorZ.bottom, true);
-                                doc.objects().addMesh(balMesh, attr);
-                                balMesh.delete();
-
-                                // Railing
-                                attr.name = `Balcony_Railing_P${polyIdx}_F${i}_${j}`;
-                                const railingHeight = 1.1;
-                                const iStart = [ p1[0] + deltaInner[j].x, p1[1] + deltaInner[j].y ];
-                                const iEnd = [ p2[0] + deltaInner[jNext].x, p2[1] + deltaInner[jNext].y ];
-
-                                const railPts = [
-                                    oStart,
-                                    oEnd,
-                                    iEnd,
-                                    iStart
-                                ];
-                                const railMesh = createExtrudedPolygonMesh(rhino, railPts, railingHeight, floorZ.bottom + railingHeight, true);
-                                doc.objects().addMesh(railMesh, attr);
-                                railMesh.delete();
-                            }
-                            attr.delete();
-                        }
 
                         // 5. Brise-Soleil (extend to all floors from roof to ground, south & west sides, Timber group)
                         if (showBriseSoleil && floorPolygon && floorPolygon.length >= 3) {

@@ -52,15 +52,12 @@ const state = {
   showFloorSlabs: true,
   showRoofSlab: true,
   showVaultedRoofs: true,
-  showBalconies: true,
   showBriseSoleil: true,
   show3DCells: false,
   columnRadius: 0.25,
   beamWidth: 0.3,
   beamDepth: 0.5,
   slabThickness: 0.2,
-  balconyOffset: 1.5,
-  balconyThickness: 0.15,
   louverWidth: 0.05,
   louverDepth: 0.2,
   louverSpacing: 1.0,
@@ -3349,94 +3346,7 @@ function build3DStack() {
         });
       }
 
-      // 4. Balconies (NULL on Ground & Roof, NULL if facing other buildings or touching partitions)
-      if (state.showBalconies && !isGroundFloor && !isRoofFloor) {
-        const N = floorPolygon.length;
-        const offsets = [];
-        const hasBalcony = [];
-        for (let j = 0; j < N; j++) {
-          const context = segmentContexts[j];
-          const hasBal = (context !== 'other_building' && context !== 'touching');
-          hasBalcony.push(hasBal);
-          offsets.push(hasBal ? (context === 'courtyard' ? state.balconyOffset * 1.5 : state.balconyOffset) : 0);
-        }
 
-        const deltaOuter = [];
-        const deltaInner = [];
-        const rThick = 0.02;
-
-        for (let j = 0; j < N; j++) {
-          const jPrev = (j - 1 + N) % N;
-          const dPrev = offsets[jPrev];
-          const dCurr = offsets[j];
-          const nPrev = boundaryNormals[jPrev];
-          const nCurr = boundaryNormals[j];
-
-          if (dPrev > 0 && dCurr > 0) {
-            deltaOuter.push(getMiterOffset(nPrev, nCurr, dPrev, dCurr));
-            deltaInner.push(getMiterOffset(nPrev, nCurr, dPrev - rThick, dCurr - rThick));
-          } else if (dPrev > 0) {
-            deltaOuter.push({ x: nPrev.x * dPrev, y: nPrev.y * dPrev });
-            deltaInner.push({ x: nPrev.x * (dPrev - rThick), y: nPrev.y * (dPrev - rThick) });
-          } else if (dCurr > 0) {
-            deltaOuter.push({ x: nCurr.x * dCurr, y: nCurr.y * dCurr });
-            deltaInner.push({ x: nCurr.x * (dCurr - rThick), y: nCurr.y * (dCurr - rThick) });
-          } else {
-            deltaOuter.push({ x: 0, y: 0 });
-            deltaInner.push({ x: 0, y: 0 });
-          }
-        }
-
-        for (let j = 0; j < N; j++) {
-          if (!hasBalcony[j]) continue;
-          const jNext = (j + 1) % N;
-          const p1 = floorPolygon[j];
-          const p2 = floorPolygon[jNext];
-
-          const oStart = { x: p1.x + deltaOuter[j].x, y: p1.y + deltaOuter[j].y };
-          const oEnd = { x: p2.x + deltaOuter[jNext].x, y: p2.y + deltaOuter[jNext].y };
-
-          // 1. Balcony Slab Shape (CCW): oStart -> oEnd -> p2 -> p1
-          const balShape = new THREE.Shape();
-          balShape.moveTo(oStart.x, oStart.y);
-          balShape.lineTo(oEnd.x, oEnd.y);
-          balShape.lineTo(p2.x, p2.y);
-          balShape.lineTo(p1.x, p1.y);
-          balShape.closePath();
-
-          const balGeom = new THREE.ExtrudeGeometry(balShape, { depth: state.balconyThickness, bevelEnabled: false });
-          const balMesh = new THREE.Mesh(balGeom, timberMat);
-          balMesh.position.z = floorZ.bottom - state.balconyThickness;
-          balMesh.userData = { 
-            is3DStackMesh: true, 
-            polygonId: item.id,
-            materialGroup: 'tectonic_timber'
-          };
-          stack3DGroup.add(balMesh);
-
-          // 2. Railing Shape (CCW): oStart -> oEnd -> iEnd -> iStart
-          const iStart = { x: p1.x + deltaInner[j].x, y: p1.y + deltaInner[j].y };
-          const iEnd = { x: p2.x + deltaInner[jNext].x, y: p2.y + deltaInner[jNext].y };
-
-          const railShape = new THREE.Shape();
-          railShape.moveTo(oStart.x, oStart.y);
-          railShape.lineTo(oEnd.x, oEnd.y);
-          railShape.lineTo(iEnd.x, iEnd.y);
-          railShape.lineTo(iStart.x, iStart.y);
-          railShape.closePath();
-
-          const railingHeight = 1.1;
-          const railGeom = new THREE.ExtrudeGeometry(railShape, { depth: railingHeight, bevelEnabled: false });
-          const railMesh = new THREE.Mesh(railGeom, timberMatDouble);
-          railMesh.position.z = floorZ.bottom;
-          railMesh.userData = { 
-            is3DStackMesh: true, 
-            polygonId: item.id,
-            materialGroup: 'tectonic_timber'
-          };
-          stack3DGroup.add(railMesh);
-        }
-      }
 
       // 5. Brise-Soleil (extend to all floors from roof to ground, on south and west sides, Timber group)
       if (state.showBriseSoleil) {
@@ -4108,13 +4018,7 @@ function setupRhinoUIControls() {
     });
   }
 
-  const chkBalconies = document.getElementById('chk-3d-balconies');
-  if (chkBalconies) {
-    chkBalconies.addEventListener('change', (e) => {
-      state.showBalconies = e.target.checked;
-      draw();
-    });
-  }
+
 
   const chkBriseSoleil = document.getElementById('chk-3d-brisesoleil');
   if (chkBriseSoleil) {
