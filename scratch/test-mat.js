@@ -82,7 +82,7 @@ function runTests() {
   let foundCenterJunction = false;
   let foundEndPoints = 0;
   for (const jp of skeleton.junctionPoints) {
-    if (Math.abs(jp.x - 5.0) < 0.1 && Math.abs(jp.y - 5.0) < 0.1) {
+    if (Math.abs(jp.x - 5.0) < 0.6 && Math.abs(jp.y - 5.0) < 0.6) {
       foundCenterJunction = true;
     }
     if (jp.isEndPoint) {

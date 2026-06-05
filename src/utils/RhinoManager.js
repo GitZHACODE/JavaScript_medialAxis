@@ -377,6 +377,7 @@ export class RhinoManager {
                 showBalconies: this.appContext.state.showBalconies,
                 showBriseSoleil: this.appContext.state.showBriseSoleil,
                 showVaultedRoofs: this.appContext.state.showVaultedRoofs,
+                show3DCells: this.appContext.state.show3DCells,
                 columnRadius: this.appContext.state.columnRadius,
                 beamWidth: this.appContext.state.beamWidth,
                 beamDepth: this.appContext.state.beamDepth,
@@ -425,7 +426,9 @@ function classifyBoundarySegment(p1, p2, normal, item, allPolygons) {
     }
   });
 
-  if (closestHitDist < 25.0) {
+  if (closestHitDist < 0.5) {
+    return 'touching';
+  } else if (closestHitDist < 25.0) {
     return closestHitType;
   }
   return 'open_space';

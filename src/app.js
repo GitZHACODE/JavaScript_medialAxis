@@ -48,6 +48,7 @@ const state = {
   showBalconies: true,
   showBriseSoleil: true,
   showVaultedRoofs: true,
+  show3DCells: true,
   columnRadius: 0.25,
   beamWidth: 0.3,
   beamDepth: 0.5,
@@ -1715,7 +1716,9 @@ function classifyBoundarySegment(p1, p2, normal, item, allPolygons) {
     }
   });
 
-  if (closestHitDist < 25.0) {
+  if (closestHitDist < 0.5) {
+    return 'touching';
+  } else if (closestHitDist < 25.0) {
     return closestHitType;
   }
   return 'open_space';
@@ -1772,6 +1775,9 @@ function build3DStack() {
   });
 
   const originalActiveId = state.activePolygonId;
+
+  const columnsByFloor = Array.from({ length: numFloors }, () => []);
+  const beamsByFloor = Array.from({ length: numFloors }, () => []);
 
   // Loop through all imported polygons with active scaffold
   state.importedPolygons.forEach(item => {
@@ -1841,6 +1847,113 @@ function build3DStack() {
       }
     }
 
+    // Initialize explicit 3D datastructures
+    item.planarGraph3D = { vertices: [], edges: [] };
+    item.structuralBays3D = [];
+
+    // Build 3D planar graph
+    const baseVertexCount = vertices.length;
+    for (let f = 0; f < numFloors; f++) {
+      const zFloor = f * floorHeight;
+      vertices.forEach((v, idx) => {
+        item.planarGraph3D.vertices.push({
+          id: `vertex_P${item.id}_F${f}_V${idx}`,
+          x: v.x,
+          y: v.y,
+          z: zFloor
+        });
+      });
+    }
+
+    for (let f = 0; f < numFloors; f++) {
+      edges.forEach(([ptU, ptV], idx) => {
+        const uIdx = f * baseVertexCount + vertices.indexOf(ptU);
+        const vIdx = f * baseVertexCount + vertices.indexOf(ptV);
+        item.planarGraph3D.edges.push({
+          u: uIdx,
+          v: vIdx,
+          type: 'beam',
+          floorIndex: f
+        });
+      });
+    }
+
+    for (let f = 0; f < numFloors - 1; f++) {
+      vertices.forEach((v, idx) => {
+        const uIdx = f * baseVertexCount + idx;
+        const vIdx = (f + 1) * baseVertexCount + idx;
+        item.planarGraph3D.edges.push({
+          u: uIdx,
+          v: vIdx,
+          type: 'column',
+          floorIndex: f
+        });
+      });
+    }
+
+    // Build 3D bays
+    if (state.structuralBays) {
+      state.structuralBays.forEach((cell, cellIdx) => {
+        if (cell.length < 3) return;
+
+        let classification = 'interior';
+        const isCorner = cellIsCorner[cellIdx];
+        if (isCorner) {
+          classification = 'corner';
+        } else {
+          let hasCourtyard = false;
+          let hasNeighbor = false;
+          let hasOpenSpace = false;
+
+          for (let k = 0; k < cell.length; k++) {
+            const pt1 = cell[k];
+            const pt2 = cell[(k + 1) % cell.length];
+
+            for (let j = 0; j < state.polygon.length; j++) {
+              const bp1 = state.polygon[j];
+              const bp2 = state.polygon[(j + 1) % state.polygon.length];
+
+              const d11 = Math.hypot(pt1.x - bp1.x, pt1.y - bp1.y);
+              const d22 = Math.hypot(pt2.x - bp2.x, pt2.y - bp2.y);
+              const d12 = Math.hypot(pt1.x - bp2.x, pt1.y - bp2.y);
+              const d21 = Math.hypot(pt2.x - bp1.x, pt2.y - bp1.y);
+
+              if ((d11 < 0.1 && d22 < 0.1) || (d12 < 0.1 && d21 < 0.1)) {
+                const context = segmentContexts[j];
+                if (context === 'courtyard') hasCourtyard = true;
+                else if (context === 'other_building') hasNeighbor = true;
+                else if (context === 'open_space') hasOpenSpace = true;
+              }
+            }
+          }
+
+          if (hasCourtyard) classification = 'courtyard';
+          else if (hasNeighbor) classification = 'neighbor';
+          else if (hasOpenSpace) classification = 'open_space';
+        }
+
+        let colorHex = '#64748b'; // Cool Grey for interior
+        if (classification === 'corner') colorHex = '#8b5cf6'; // Violet
+        else if (classification === 'courtyard') colorHex = '#10b981'; // Emerald
+        else if (classification === 'neighbor') colorHex = '#f59e0b'; // Amber
+        else if (classification === 'open_space') colorHex = '#0ea5e9'; // Sky Blue
+
+        for (let f = 0; f < numFloors; f++) {
+          const zFloor = f * floorHeight;
+          item.structuralBays3D.push({
+            id: `${item.id}_bay_${cellIdx}_floor_${f}`,
+            cellIdx: cellIdx,
+            floorIndex: f,
+            polygonId: item.id,
+            vertices: cell.map(pt => ({ x: pt.x, y: pt.y, z: zFloor })),
+            topVertices: cell.map(pt => ({ x: pt.x, y: pt.y, z: zFloor + floorHeight })),
+            phenotype: classification,
+            color: colorHex
+          });
+        }
+      });
+    }
+
     for (let i = 0; i < numFloors; i++) {
       const zFloor = i * floorHeight;
       const isGroundFloor = i === 0;
@@ -1870,7 +1983,7 @@ function build3DStack() {
       }
 
       // 2. Columns
-      if (state.show3DColumns) {
+      if (state.show3DColumns && !isRoofFloor) {
         let slabThick = state.slabThickness;
         if (isGroundFloor) slabThick = state.slabThickness * 1.5;
         else if (isRoofFloor) slabThick = state.slabThickness * 0.8;
@@ -1900,6 +2013,16 @@ function build3DStack() {
         const cornerGeom = new THREE.ExtrudeGeometry(lShape, { depth: colHeight, bevelEnabled: false });
 
         vertices.forEach(v => {
+          let isDuplicate = false;
+          for (const col of columnsByFloor[i]) {
+            if (Math.hypot(v.x - col.x, v.y - col.y) < 0.2) {
+              isDuplicate = true;
+              break;
+            }
+          }
+          if (isDuplicate) return;
+          columnsByFloor[i].push({ x: v.x, y: v.y });
+
           let isCornerVertex = false;
           for (const bp of state.polygon) {
             if (Math.hypot(v.x - bp.x, v.y - bp.y) < 0.1) {
@@ -1943,10 +2066,21 @@ function build3DStack() {
           const len = Math.hypot(dx, dy);
           if (len < 1e-3) return;
 
-          const beamGeom = new THREE.BoxGeometry(len, bWidth, bDepth);
-          const beamMesh = new THREE.Mesh(beamGeom, beamMat);
           const midX = (ptU.x + ptV.x) / 2;
           const midY = (ptU.y + ptV.y) / 2;
+
+          let isDuplicate = false;
+          for (const beam of beamsByFloor[i]) {
+            if (Math.hypot(midX - beam.x, midY - beam.y) < 0.2) {
+              isDuplicate = true;
+              break;
+            }
+          }
+          if (isDuplicate) return;
+          beamsByFloor[i].push({ x: midX, y: midY });
+
+          const beamGeom = new THREE.BoxGeometry(len, bWidth, bDepth);
+          const beamMesh = new THREE.Mesh(beamGeom, beamMat);
           const midZ = zFloor - slabThick - bDepth / 2;
           beamMesh.position.set(midX, midY, midZ);
           beamMesh.rotation.z = Math.atan2(dy, dx);
@@ -1957,7 +2091,7 @@ function build3DStack() {
         });
       }
 
-      // 4. Balconies (NULL on Ground & Roof, NULL if facing other buildings)
+      // 4. Balconies (NULL on Ground & Roof, NULL if facing other buildings or touching partitions)
       if (state.showBalconies && !isGroundFloor && !isRoofFloor) {
         for (let j = 0; j < state.polygon.length; j++) {
           const p1 = state.polygon[j];
@@ -1967,8 +2101,8 @@ function build3DStack() {
           const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
           if (len < 1e-3) continue;
 
-          if (context === 'other_building') {
-            continue; // NULL balcony facing neighboring buildings for privacy
+          if (context === 'other_building' || context === 'touching') {
+            continue; // NULL balcony facing neighboring buildings or touching partitions for privacy
           }
 
           let bOffset = state.balconyOffset;
@@ -2023,8 +2157,8 @@ function build3DStack() {
         }
       }
 
-      // 5. Brise-Soleil (NULL on Ground, NULL on North/East facades)
-      if (state.showBriseSoleil && !isGroundFloor) {
+      // 5. Brise-Soleil (NULL on Ground, NULL on North/East facades, NULL on Roof floor)
+      if (state.showBriseSoleil && !isGroundFloor && !isRoofFloor) {
         const sunDir = new Vector2D(-0.707, -0.707); // Southwest Sun Vector
 
         for (let j = 0; j < state.polygon.length; j++) {
@@ -2044,8 +2178,8 @@ function build3DStack() {
           if (context === 'other_building') {
             bDepth = state.louverDepth * 0.8;
             bSpacing = state.louverSpacing * 0.6; // Dense privacy screening
-          } else if (context === 'courtyard') {
-            active = false; // NULL brise-soleil to keep courtyard views open
+          } else if (context === 'courtyard' || context === 'touching') {
+            active = false; // NULL brise-soleil to keep courtyard views open / touching
           } else {
             if (alignment > 0) {
               bDepth = state.louverDepth * (0.3 + 1.2 * alignment); // Solar alignment gradient
@@ -2101,12 +2235,15 @@ function build3DStack() {
         if (cell.length < 3) return;
 
         const centroid = getCentroid(cell);
-        let sumDist = 0;
-        cell.forEach(pt => { sumDist += Math.hypot(pt.x - centroid.x, pt.y - centroid.y); });
-        const R_avg = sumDist / cell.length;
-        if (R_avg < 1e-3) return;
+        
+        const cellHasCorner = cell.some(pt => {
+          return state.polygon.some(bp => Math.hypot(pt.x - bp.x, pt.y - bp.y) < 0.1);
+        });
 
-        const isCorner = cellIsCorner[cellIdx];
+        const vertexFlares = cell.map(pt => {
+          const isCornerVert = state.polygon.some(bp => Math.hypot(pt.x - bp.x, pt.y - bp.y) < 0.1);
+          return isCornerVert ? 1.0 : 0.0;
+        });
 
         const cellVertices = [];
         const cellIndices = [];
@@ -2115,28 +2252,28 @@ function build3DStack() {
         for (let j = 0; j < cell.length; j++) {
           const p1 = cell[j];
           const p2 = cell[(j + 1) % cell.length];
+          const flareStart = vertexFlares[j];
+          const flareEnd = vertexFlares[(j + 1) % cell.length];
 
           for (let u = 0; u <= M; u++) {
             for (let v = 0; v <= u; v++) {
               let bx = p1.x, by = p1.y;
+              const tSeg = u > 0 ? v / u : 0.0;
               if (u > 0) {
-                const tSeg = v / u;
                 bx = p1.x + (p2.x - p1.x) * tSeg;
                 by = p1.y + (p2.y - p1.y) * tSeg;
               }
               const tCent = u / M;
               const x = centroid.x + (bx - centroid.x) * tCent;
               const y = centroid.y + (by - centroid.y) * tCent;
-              const d = Math.hypot(x - centroid.x, y - centroid.y);
               
-              let z;
-              if (isCorner) {
-                const heightFactor = (d / R_avg) ** 2;
-                z = zTop + state.vaultHeight * (0.2 + 0.8 * heightFactor); // Butterfly flared canopy
-              } else {
-                const heightFactor = Math.max(0, 1 - (d / R_avg) ** 2);
-                z = zTop + state.vaultHeight * heightFactor; // Standard dome
-              }
+              const vFlare = flareStart * (1 - tSeg) + flareEnd * tSeg;
+              const cellFlare = cellHasCorner ? 1.0 : 0.0;
+              const hCenter = state.vaultHeight * (1 - 0.8 * cellFlare);
+              const hBoundary = state.vaultHeight * vFlare * cellFlare;
+              const heightFactor = hCenter * (1 - tCent * tCent) + hBoundary * tCent * tCent;
+              const z = zTop + heightFactor;
+
               cellVertices.push(x, y, z);
             }
           }
@@ -2175,6 +2312,73 @@ function build3DStack() {
         const vaultWireMesh = new THREE.Mesh(vaultGeom, vaultWireframeMat);
         vaultWireMesh.userData = { is3DStackMesh: true, polygonId: item.id };
         stack3DGroup.add(vaultWireMesh);
+      });
+    }
+
+    // 7. 3D Cell Volumes (colored by classification)
+    if (state.show3DCells && item.structuralBays3D && item.structuralBays3D.length > 0) {
+      item.structuralBays3D.forEach(cell3d => {
+        const cellShape = new THREE.Shape();
+        cellShape.moveTo(cell3d.vertices[0].x, cell3d.vertices[0].y);
+        for (let k = 1; k < cell3d.vertices.length; k++) {
+          cellShape.lineTo(cell3d.vertices[k].x, cell3d.vertices[k].y);
+        }
+        cellShape.closePath();
+
+        const cellVolumeGeom = new THREE.ExtrudeGeometry(cellShape, {
+          depth: floorHeight,
+          bevelEnabled: false
+        });
+
+        const colorVal = new THREE.Color(cell3d.color);
+        const cellVolumeMat = new THREE.MeshStandardMaterial({
+          color: colorVal,
+          transparent: true,
+          opacity: 0.12,
+          roughness: 0.2,
+          metalness: 0.1,
+          side: THREE.DoubleSide,
+          depthWrite: false
+        });
+
+        const cellVolumeMesh = new THREE.Mesh(cellVolumeGeom, cellVolumeMat);
+        cellVolumeMesh.position.z = cell3d.vertices[0].z;
+        cellVolumeMesh.userData = { is3DStackMesh: true, polygonId: item.id };
+        stack3DGroup.add(cellVolumeMesh);
+
+        // Add wireframe outline lines
+        const edgeColor = new THREE.Color(cell3d.color).clone().multiplyScalar(0.7);
+        const outlineMat = new THREE.LineBasicMaterial({
+          color: edgeColor,
+          transparent: true,
+          opacity: 0.25
+        });
+
+        const outlinePts = cell3d.vertices.map(pt => new THREE.Vector3(pt.x, pt.y, pt.z));
+        outlinePts.push(outlinePts[0]);
+        const outlineGeom = new THREE.BufferGeometry().setFromPoints(outlinePts);
+        const bottomLine = new THREE.Line(outlineGeom, outlineMat);
+        bottomLine.userData = { is3DStackMesh: true, polygonId: item.id };
+        stack3DGroup.add(bottomLine);
+
+        const topOutlinePts = cell3d.topVertices.map(pt => new THREE.Vector3(pt.x, pt.y, pt.z));
+        topOutlinePts.push(topOutlinePts[0]);
+        const topOutlineGeom = new THREE.BufferGeometry().setFromPoints(topOutlinePts);
+        const topLine = new THREE.Line(topOutlineGeom, outlineMat);
+        topLine.userData = { is3DStackMesh: true, polygonId: item.id };
+        stack3DGroup.add(topLine);
+
+        for (let k = 0; k < cell3d.vertices.length; k++) {
+          const ptB = cell3d.vertices[k];
+          const vertPts = [
+            new THREE.Vector3(ptB.x, ptB.y, ptB.z),
+            new THREE.Vector3(ptB.x, ptB.y, ptB.z + floorHeight)
+          ];
+          const vertGeom = new THREE.BufferGeometry().setFromPoints(vertPts);
+          const vertLine = new THREE.Line(vertGeom, outlineMat);
+          vertLine.userData = { is3DStackMesh: true, polygonId: item.id };
+          stack3DGroup.add(vertLine);
+        }
       });
     }
   });
@@ -2703,6 +2907,14 @@ function setupRhinoUIControls() {
   if (chkVaults) {
     chkVaults.addEventListener('change', (e) => {
       state.showVaultedRoofs = e.target.checked;
+      draw();
+    });
+  }
+
+  const chkCells = document.getElementById('chk-3d-cells');
+  if (chkCells) {
+    chkCells.addEventListener('change', (e) => {
+      state.show3DCells = e.target.checked;
       draw();
     });
   }
